@@ -13,7 +13,8 @@ buyagent/
 │   ├── products.csv        ★ 감시할 상품 목록 (엑셀로 편집)
 │   └── discover.csv        ★ 신상품 발견용 검색어
 ├── config/
-│   ├── settings.toml       API 키, 환율, 배대지 요금표, 국가별 면세 한도, 마켓 수수료
+│   ├── settings.toml       환율, 배대지 요금표, 국가별 면세 한도, 마켓 수수료
+│   ├── settings.local.toml API 키·웹훅 (git 제외, .example 복사해서 만듦)
 │   ├── categories.toml     카테고리 규칙, 차단 키워드, 경고 키워드
 │   └── glossary.toml       한글 → 일본어 단어장 (규칙에 한글로 쓸 때)
 ├── sources/                쇼핑몰 플러그인 (파일 하나 = 쇼핑몰 하나)
@@ -40,6 +41,22 @@ python main.py --only chiikawa   # ID에 'chiikawa'가 들어간 것만 실행
 ```
 
 Python 3.11 이상이 필요하고, 다른 패키지는 설치하지 않아도 됩니다.
+
+### API 키 넣기
+
+API 키와 웹훅 주소는 `config/settings.local.toml`에 넣어요. 이 파일은 git에 올라가지 않아요.
+
+1. `config/settings.local.toml.example`을 복사해서 이름을 `settings.local.toml`로 바꿔요.
+2. 키를 채워요. 여기 쓴 값이 `settings.toml`의 같은 항목을 덮어써요.
+
+### 설정 점검 (`--check`)
+
+상품을 추가하거나 설정을 바꾼 뒤에는 `python main.py --check`를 돌려 보세요. 실행 중에 조용히 틀리는 것들을 미리 잡아 줘요.
+
+- **❌ 오류:** 상품 ID 중복, 국가 설정·배대지 요금표·환율 누락, 없는 배송 등급, 소스 이름 오타, 수수료를 퍼센트로 쓴 경우(0.109가 아니라 10.9) 등
+- **⚠ 주의:** API 키 미입력, JAN 형식 이상, 상품명 조건(must_include·jan)이 없는 상품, 단어장에 없는 한글 등
+
+오류가 있으면 종료 코드 1로 끝나요. 평소 실행할 때도 오류가 있으면 맨 위에 경고가 떠요.
 
 ## 확장 방법
 

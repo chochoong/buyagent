@@ -38,6 +38,7 @@ from core.pricing import price_offer                       # noqa: E402
 from core.report import fmt_result, send_webhook, write_csv  # noqa: E402
 from core.rules import category_label, check_spec, filter_offers, warnings_for  # noqa: E402
 from core.storage import Store                             # noqa: E402
+from core.validate import ERROR, validate                  # noqa: E402
 from sources import REGISTRY, build_sources                # noqa: E402
 
 
@@ -124,20 +125,33 @@ def warn_unknown_words(cfg: dict) -> None:
               + ", ".join(cfg["glossary_unknown"]), file=sys.stderr)
 
 
-def check(cfg: dict, specs: list[Spec]) -> None:
+def check(cfg: dict, specs: list[Spec], all_specs: list[Spec]) -> int:
+    """설정 점검. 오류가 있으면 1 반환 (작업 스케줄러·스크립트에서 실패로 인식)"""
     print("\n[설정 점검]")
     print("플러그인:", ", ".join(sorted(REGISTRY)))
-    for word, ja in cfg["glossary_used"].items():
-        print(f"  단어장: {word} → {', '.join(ja)}")
-    for word in cfg["glossary_unknown"]:
-        print(f"  단어장: ⚠ '{word}' 없음 → config/glossary.toml에 추가하세요")
+    print("개인 설정:", cfg["_local_settings"] or "없음 (config/settings.local.toml.example 을 복사해서 만드세요)")
     for name, conf in cfg.get("sources", {}).items():
         cls = REGISTRY.get(name)
         state = "플러그인 없음" if not cls else ("준비됨" if cls(conf, cfg).ready() else "비활성/키 없음")
         print(f"  소스 {name}: {state}")
+    for word, ja in cfg["glossary_used"].items():
+        print(f"  단어장: {word} → {', '.join(ja)}")
+
+    print("\n[감시 대상]")
     for s in specs:
         reason = check_spec(cfg, s)
         print(f"  {'신상' if s.discover else '상품'} {s.id}: {'⛔ ' + reason if reason else 'OK'}")
+
+    issues = validate(cfg, all_specs, REGISTRY, BASE)     # ID 중복은 --only 와 상관없이 전체로 검사
+    errors = [m for lv, m in issues if lv == ERROR]
+    warns = [m for lv, m in issues if lv != ERROR]
+    print("\n[문제 점검]")
+    for m in errors:
+        print(f"  ❌ {m}")
+    for m in warns:
+        print(f"  ⚠ {m}")
+    print(f"  → 오류 {len(errors)}건, 주의 {len(warns)}건" + ("" if issues else " (문제 없음)"))
+    return 1 if errors else 0
 
 
 def main() -> None:
@@ -150,15 +164,18 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = load_config(BASE, Path(args.settings) if args.settings else None)
-    specs = [s for s in load_specs(BASE, cfg["markets"]) if args.only in s.id]
+    all_specs = load_specs(BASE, cfg["markets"])
+    specs = [s for s in all_specs if args.only in s.id]
     if args.check:
-        check(cfg, specs)
-        return
+        sys.exit(check(cfg, specs, all_specs))
 
     warn_unknown_words(cfg)
+    n_err = sum(lv == ERROR for lv, _ in validate(cfg, all_specs, REGISTRY, BASE))
+    if n_err:
+        print(f"[경고] 설정 오류 {n_err}건 → python main.py --check 로 확인하세요", file=sys.stderr)
     run = Runner(cfg, args.demo, args.bundle)
     if not run.sources:
-        sys.exit("사용 가능한 소스가 없습니다. settings.toml에 API 키를 넣거나 --demo로 실행하세요.")
+        sys.exit("사용 가능한 소스가 없습니다. config/settings.local.toml 에 API 키를 넣거나 --demo로 실행하세요.")
     markets = [m["name"] for m in cfg["markets"].values()]
     print(f"\n환율: {run.fx.summary()}\n소스: {', '.join(run.sources)}")
 
