@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""
+구매대행 모니터 v3 - 확장형
+
+  python main.py                  # 실제 실행
+  python main.py --demo           # API 키 없이 예시 데이터로 실행
+  python main.py --bundle 5       # 5개 묶음 배송 기준으로 개당 원가 계산
+  python main.py --only SBTQ041   # 특정 상품만 (ID 일부 일치)
+  python main.py --check          # 설정·카탈로그 점검만
+
+확장 방법
+  - 상품 추가        → catalog/products.csv 에 한 줄 추가 (엑셀 편집 가능)
+  - 신상 감시 추가   → catalog/discover.csv 에 한 줄 추가
+  - 카테고리·규칙    → config/categories.toml
+  - 새 쇼핑몰/국가   → sources/_template.py 복사 + settings.toml 섹션 추가
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE))
+
+# Windows에서 출력을 파일로 넘기면(작업 스케줄러, > run.log) cp949로 인코딩돼서 이모지에서 죽음 → UTF-8 고정
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+from core.config import load_config, load_specs          # noqa: E402
+from core.fx import FX                                     # noqa: E402
+from core.models import Offer, Query, Result, Spec         # noqa: E402
+from core.pricing import price_offer                       # noqa: E402
+from core.report import fmt_result, send_webhook, write_csv  # noqa: E402
+from core.rules import category_label, check_spec, filter_offers, warnings_for  # noqa: E402
+from core.storage import Store                             # noqa: E402
+from sources import REGISTRY, build_sources                # noqa: E402
+
+
+class Runner:
+    def __init__(self, cfg: dict, demo: bool, bundle: int):
+        self.cfg, self.demo, self.bundle = cfg, demo, bundle
+        self.fx = FX(cfg, demo)
+        self.sources = build_sources(cfg, demo)
+        self.store = Store(BASE / ("history_demo.db" if demo else "history.db"))
+        self.ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # -- 검색: 지정된 소스(없으면 전체)에서 모아오기 --
+    def fetch(self, spec: Spec, newest: bool) -> tuple[list[Offer], list[str]]:
+        names = list(self.sources) if (self.demo or not spec.sources) else spec.sources
+        offers, errors = [], []
+        for n in names:
+            src = self.sources.get(n)
+            if src is None:
+                errors.append(f"소스 '{n}' 비활성/키 없음")
+                continue
+            try:
+                offers += src.search(Query(spec.keyword, spec.jan, newest))
+            except Exception as e:
+                errors.append(f"{n}: {e}")
+        return offers, errors
+
+    def priced(self, spec: Spec, offer: Offer) -> Result:
+        r = Result(spec=spec)
+        try:
+            price_offer(self.cfg, self.fx, r, offer, self.bundle)
+        except KeyError as e:
+            r.offer, r.alerts = offer, [f"계산 불가: {e}"]
+        r.alerts += warnings_for(self.cfg, offer.name)
+        return r
+
+    def cheapest(self, spec: Spec, offers: list[Offer]) -> Result:
+        """배대지 요금·관부가세까지 넣은 '개당 원가'가 가장 낮은 오퍼.
+        (현지가만 비교하면 일본·미국처럼 배송비가 다른 나라를 섞을 때 틀림)"""
+        cands = [self.priced(spec, o) for o in offers]
+        good = [r for r in cands if r.cost_krw > 0]
+        return min(good, key=lambda r: r.cost_krw) if good else cands[0]
+
+    def run_product(self, spec: Spec) -> Result:
+        res = Result(spec=spec)
+        if reason := check_spec(self.cfg, spec):
+            res.blocked_reason = reason
+            return res
+        offers, errors = self.fetch(spec, newest=False)
+        ok = [o for o in filter_offers(self.cfg, offers, spec, res.excluded) if o.in_stock]
+        if ok:
+            stats = res.excluded
+            res = self.cheapest(spec, ok)
+            res.excluded = stats
+            if not spec.trusted_shops and self.cfg["categories"][spec.category].get("check_shop", True):
+                res.alerts.append(f"판매처 '{res.offer.shop}' 정품 취급처인지 확인 후 영수증 보관")
+        if errors and not offers:
+            res.failed = True
+            res.alerts.append("조회 실패: " + " / ".join(errors))
+        else:
+            self.store.track(res, self.ts, self.cfg["alerts"]["price_change_rate"])
+        return res
+
+    def run_discover(self, spec: Spec) -> tuple[list[Result], str]:
+        if reason := check_spec(self.cfg, spec):
+            return [], f"건너뜀: {reason}"
+        offers, errors = self.fetch(spec, newest=True)
+        if errors and not offers:
+            return [], "조회 실패: " + " / ".join(errors)
+        stats: dict[str, int] = {}
+        ok = [o for o in filter_offers(self.cfg, offers, spec, stats) if o.in_stock]
+        first = self.store.is_first_watch(spec.name)
+        new = [self.priced(spec, o) for o in ok
+               if self.store.mark_seen(spec.name, o.key, o.name, self.ts) and (self.demo or not first)]
+        msg = (f"첫 실행: 기존 {len(ok)}건 기록(다음부터 알림)" if first and not self.demo
+               else f"신상 {len(new)}건")
+        if stats:
+            msg += " | 제외: " + ", ".join(f"{k} {v}" for k, v in stats.items())
+        return new, f"검색 {len(offers)}건 → {msg}"
+
+
+def warn_unknown_words(cfg: dict) -> None:
+    if cfg["glossary_unknown"]:
+        print("[경고] 단어장(config/glossary.toml)에 없는 한글 단어 → 일본어 상품명에 걸리지 않음: "
+              + ", ".join(cfg["glossary_unknown"]), file=sys.stderr)
+
+
+def check(cfg: dict, specs: list[Spec]) -> None:
+    print("\n[설정 점검]")
+    print("플러그인:", ", ".join(sorted(REGISTRY)))
+    for word, ja in cfg["glossary_used"].items():
+        print(f"  단어장: {word} → {', '.join(ja)}")
+    for word in cfg["glossary_unknown"]:
+        print(f"  단어장: ⚠ '{word}' 없음 → config/glossary.toml에 추가하세요")
+    for name, conf in cfg.get("sources", {}).items():
+        cls = REGISTRY.get(name)
+        state = "플러그인 없음" if not cls else ("준비됨" if cls(conf, cfg).ready() else "비활성/키 없음")
+        print(f"  소스 {name}: {state}")
+    for s in specs:
+        reason = check_spec(cfg, s)
+        print(f"  {'신상' if s.discover else '상품'} {s.id}: {'⛔ ' + reason if reason else 'OK'}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="구매대행 모니터 v3")
+    ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--bundle", type=int, default=0, help="묶음 배송 수량 (개당 원가 계산)")
+    ap.add_argument("--only", default="", help="ID에 이 문자열이 들어간 상품만")
+    ap.add_argument("--settings", default="", help="settings.toml 경로")
+    ap.add_argument("--check", action="store_true", help="설정 점검만")
+    args = ap.parse_args()
+
+    cfg = load_config(BASE, Path(args.settings) if args.settings else None)
+    specs = [s for s in load_specs(BASE, cfg["markets"]) if args.only in s.id]
+    if args.check:
+        check(cfg, specs)
+        return
+
+    warn_unknown_words(cfg)
+    run = Runner(cfg, args.demo, args.bundle)
+    if not run.sources:
+        sys.exit("사용 가능한 소스가 없습니다. settings.toml에 API 키를 넣거나 --demo로 실행하세요.")
+    markets = [m["name"] for m in cfg["markets"].values()]
+    print(f"\n환율: {run.fx.summary()}\n소스: {', '.join(run.sources)}")
+
+    rows: list[tuple[str, Result]] = []
+    notify: list[str] = []
+
+    print("\n" + "=" * 72 + "\n[고정 모니터링 상품]")
+    for spec in (s for s in specs if not s.discover):
+        try:
+            r = run.run_product(spec)
+        except Exception as e:          # 상품 하나가 실패해도 나머지는 계속
+            r = Result(spec=spec, failed=True, alerts=[f"처리 중 오류: {type(e).__name__}: {e}"])
+        print(f"\n■ {spec.name}  ({category_label(cfg, spec.category)})")
+        print("\n".join(fmt_result(r)))
+        rows.append(("고정", r))
+        # 품절·재입고·원가 변동은 항상, 나머지 경고는 지난번에 없던 것만 알림
+        state = ([r.blocked_reason] if r.blocked_reason else []) + r.alerts
+        msgs = r.events + run.store.fresh_alerts(spec.id, state, replace=not r.failed)
+        if msgs:
+            notify += [f"*{spec.name}*"] + [f"• {m}" for m in msgs]
+
+    print("\n" + "=" * 72 + "\n[신상품 발견]")
+    for spec in (s for s in specs if s.discover):
+        try:
+            new, msg = run.run_discover(spec)
+        except Exception as e:
+            new, msg = [], f"처리 중 오류: {type(e).__name__}: {e}"
+        print(f"\n▶ {spec.name}  ({msg})")
+        for r in new:
+            print(f"  ✨ {r.offer.name}")
+            print("\n".join(fmt_result(r, "     ")))
+            rows.append(("신상", r))
+            q = r.quotes[0] if r.quotes else None
+            notify.append(f"✨ [{spec.name}] {r.offer.name} — {r.offer.total:,.0f} {r.offer.currency}"
+                          + (f", 권장가 {q.recommended_price:,}원" if q else "") + f"\n   {r.offer.url}")
+
+    out = BASE / "reports" / f"report_{datetime.now():%Y%m%d_%H%M}.csv"
+    write_csv(rows, markets, out)
+    print(f"\n리포트 저장: {out}\n")
+    if not args.demo:
+        send_webhook(cfg["alerts"].get("webhook_url", ""), notify)
+
+
+if __name__ == "__main__":
+    main()

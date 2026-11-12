@@ -1,0 +1,187 @@
+# ============================================================
+#  카테고리 규칙
+#   allowed          : false면 이 카테고리는 계산도 등록도 안 함 (코드로 차단)
+#   duty_rate        : 관세율 (HS코드마다 다를 수 있으니 관세사 확인 권장)
+#   shipping_profile : settings.toml 배대지 요금표의 small / medium / large
+#   bundle_size      : 기본 묶음 배송 수량 (기본 1)
+#   min_margin_*     : 이 카테고리 전용 마진 기준
+#   notice           : 상세페이지 고지문
+#   check_shop       : true면 '정품 판매처 확인' 알림 (기본 true)
+#
+#  새 품목을 다루려면 [categories.<키>] 를 하나 추가하면 됩니다.
+# ============================================================
+
+# ---------------- 판매 가능 ----------------
+[categories.watch]
+name = "시계"
+allowed = true
+duty_rate = 0.08
+shipping_profile = "medium"
+check_shop = false
+notice = "본 상품은 해외구매대행 상품으로, 국내 공식 A/S가 제공되지 않을 수 있습니다."
+
+[categories.acrylic]
+name = "아크릴·캐릭터 잡화"
+allowed = true
+duty_rate = 0.08
+shipping_profile = "small"
+min_margin_krw = 5000
+min_margin_rate = 0.15
+notice = "본 상품은 일본 공식 판매처에서 구매하는 해외구매대행 정품입니다."
+
+[categories.figure_keychain]
+name = "피규어 키링·참"
+allowed = true
+duty_rate = 0.08
+shipping_profile = "small"
+min_margin_krw = 5000
+min_margin_rate = 0.15
+notice = "해외구매대행 정품 / 만 14세 이상 수집용(어린이용 아님) / 작은 부품 주의"
+
+[categories.stationery]
+name = "문구·다이어리"
+allowed = true
+duty_rate = 0.08
+shipping_profile = "medium"
+min_margin_krw = 7000
+min_margin_rate = 0.15
+notice = "본 상품은 해외구매대행 상품입니다."
+
+[categories.apparel]
+name = "의류"
+allowed = true
+duty_rate = 0.13
+shipping_profile = "medium"
+min_margin_krw = 7000
+min_margin_rate = 0.15
+notice = "해외구매대행 상품 / 현지 사이즈 기준"
+
+[categories.bag]
+name = "가방·파우치"
+allowed = true
+duty_rate = 0.08
+shipping_profile = "medium"
+min_margin_krw = 8000
+min_margin_rate = 0.15
+notice = "본 상품은 해외구매대행 상품입니다."
+
+[categories.kitchen]
+name = "주방·생활용품"
+allowed = true
+duty_rate = 0.08
+shipping_profile = "large"
+min_margin_krw = 8000
+min_margin_rate = 0.15
+notice = "본 상품은 해외구매대행 상품입니다."
+
+# ---------------- 등록 금지 (규제 품목) ----------------
+[categories.plush]
+name = "봉제인형·마스코트"
+allowed = false
+reason = "어린이제품(완구)으로 볼 가능성 → KC 인증 없이 구매대행 불가"
+
+[categories.kids]
+name = "유아·아동용품"
+allowed = false
+reason = "어린이제품안전특별법 → KC 인증 필요"
+
+[categories.food]
+name = "식품·과자"
+allowed = false
+reason = "목록통관 배제 + 식품 판매 자격 필요"
+
+[categories.supplement]
+name = "건강기능식품·의약품"
+allowed = false
+reason = "목록통관 배제, 수량 제한·성분 규제"
+
+[categories.cosmetics]
+name = "화장품"
+allowed = false
+reason = "기능성 화장품 등 목록통관 배제·성분 규제 → 관세사 검토 후 허용 여부 결정"
+
+[categories.electronics]
+name = "전자제품"
+allowed = false
+reason = "전파법·전기용품 KC 대상, 대부분 목록통관 배제"
+
+[categories.limited]
+name = "한정 증정품·쿠지"
+allowed = false
+reason = "증정품·경품 리셀은 일본 플랫폼에서도 금지 추세, 정품 증빙 곤란"
+
+[categories.weapon]
+name = "도검·위험물"
+allowed = false
+reason = "총포·도검 등 수입 제한"
+
+# ============================================================
+#  상품명 차단 키워드 (허용 안 된 카테고리만 차단 효과가 있음)
+#  오탐이 나도 '안 파는 쪽'으로 틀리는 게 안전합니다.
+#  except: 이 단어들은 먼저 지우고 검사 → 정상 상품이 잘못 걸리는 것 방지
+#          예) 'クリップ'(클립)이 'リップ'(립스틱)에 걸리지 않게
+# ============================================================
+[[block_rules]]
+category = "plush"
+keywords = ["ぬいぐるみ", "マスコット", "ぬいば", "パペット", "クッション", "plush"]
+
+[[block_rules]]
+category = "kids"
+keywords = ["ベビー用", "子供用", "キッズ", "おもちゃ", "玩具", "よだれかけ", "スタイ", "哺乳"]
+except = ["スタイル", "スタイリッシュ", "スタイリング", "スタイリスト"]
+
+[[block_rules]]
+category = "food"
+keywords = ["お菓子", "クッキー", "チョコ", "グミ", "ラムネ", "せんべい", "バウム", "食品",
+            "飲料", "ふりかけ", "カレー", "茶葉", "コーヒー豆"]
+except = ["チョコレートブラウン", "チョコブラウン", "チョコレート色", "チョコ色"]
+
+[[block_rules]]
+category = "supplement"
+keywords = ["サプリ", "医薬品", "第2類", "第3類", "ビタミン", "プロテイン"]
+except = ["ビタミンカラー"]
+
+[[block_rules]]
+category = "cosmetics"
+keywords = ["キャンメイク", "化粧", "ファンデーション", "日焼け止め", "美容液", "パウダー", "コスメ",
+            "リップ", "シャンプー"]
+except = ["化粧箱", "化粧ケース", "クリップ", "スリップ", "フィリップ", "トリップ", "リップル",
+          "パウダーブルー", "パウダーピンク"]
+
+[[block_rules]]
+category = "electronics"
+keywords = ["充電", "Bluetooth", "ワイヤレス", "電動", "家電", "イヤホン", "モバイルバッテリー"]
+
+[[block_rules]]
+category = "limited"
+keywords = ["ハッピーセット", "一番くじ", "非売品", "ノベルティ", "特典", "当選", "抽選"]
+
+[[block_rules]]
+category = "weapon"
+keywords = ["包丁", "ナイフ", "刀", "エアガン"]
+except = ["刀剣乱舞", "刀剣男士"]
+
+# 카테고리와 무관하게 항상 제외 (중고·부품·비정품 의심)
+[categories._exclude]
+name = "중고·비정품 의심"
+allowed = false
+
+[[block_rules]]
+category = "_exclude"
+keywords = ["中古", "ジャンク", "バラ売り", "海外版", "ノーブランド", "互換", "交換用",
+            "替えベルト", "部品", "パーツ"]
+
+# ============================================================
+#  경고 키워드: 차단은 안 하고 알림만 (확인 필요 사항)
+# ============================================================
+[[warn_rules]]
+keywords = ["電池", "battery", "バッテリー"]
+message = "배터리 포함 → 항공 운송 가능 여부를 배대지에 확인"
+
+[[warn_rules]]
+keywords = ["タンブラー", "tumbler", "食器", "マグカップ", "水筒", "弁当箱"]
+message = "식품 접촉 용기 → 식약처 수입신고 대상인지 관세사 확인"
+
+[[warn_rules]]
+keywords = ["限定", "数量限定", "受注生産", "予約"]
+message = "한정·예약 상품 → 발송 시기와 주문 취소 가능성 고지"

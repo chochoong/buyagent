@@ -1,0 +1,20 @@
+# ============================================================
+#  개인 설정 (API 키, 웹훅 주소)
+#
+#  1) 이 파일을 복사해서 이름을 settings.local.toml 로 바꾸세요.
+#  2) 아래 값을 채우세요.
+#
+#  settings.local.toml 은 git에 올라가지 않습니다 (.gitignore).
+#  여기 쓴 값은 settings.toml 의 같은 항목을 덮어씁니다.
+#  키 말고 다른 설정(예: [pricing] min_margin_krw)도 여기서 덮어쓸 수 있어요.
+# ============================================================
+
+[sources.rakuten]
+application_id = ""
+access_key = ""
+
+[sources.yahoo]
+app_id = ""          # Yahoo! JAPAN 'Client ID(アプリケーションID)'
+
+[alerts]
+webhook_url = ""     # Slack 또는 Discord 웹훅 주소

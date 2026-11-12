@@ -1,0 +1,94 @@
+# ============================================================
+#  구매대행 모니터 v3 - 기본 설정
+#  카테고리 규칙은 categories.toml, 상품 목록은 catalog/*.csv 에 있습니다.
+#
+#  ★ API 키와 웹훅 주소는 여기 말고 settings.local.toml 에 넣으세요 (git에 안 올라감).
+#    settings.local.toml.example 을 복사해서 만들면 됩니다.
+# ============================================================
+
+# ------------------------------------------------------------
+#  소스(쇼핑몰) - 섹션 이름 = sources/ 폴더의 플러그인 이름
+#  새 쇼핑몰: sources/_template.py 복사 → 여기 섹션 추가
+# ------------------------------------------------------------
+[sources.rakuten]
+enabled = true
+application_id = ""          # → settings.local.toml 에 입력
+access_key = ""              # → settings.local.toml 에 입력
+endpoint = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601"
+hits = 30
+default_shipping = 800       # 배송비 별도 상품의 가정 배송비 (엔)
+min_interval = 1.1           # 호출 간격(초). 라쿠텐은 초당 1회 제한
+retries = 2                  # 429·5xx·네트워크 오류 시 재시도 횟수
+
+[sources.yahoo]
+enabled = true
+app_id = ""                  # → settings.local.toml 에 입력
+endpoint = "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
+results = 30
+cross_border_only = true     # 해외 구매대행 허용 상품만
+default_shipping = 800
+min_interval = 1.0           # 호출 간격(초)
+retries = 2
+
+# ------------------------------------------------------------
+#  원산지(발송 국가)별 설정 - 새 국가를 붙일 때 여기에 추가
+# ------------------------------------------------------------
+[origins.JP]
+name = "일본"
+duty_free_usd = 150          # 목록통관 면세 기준 (물품가격)
+
+[origins.US]
+name = "미국"
+duty_free_usd = 200
+
+# 배대지 요금표 (원, 1회 배송 기준). 카테고리/상품이 small·medium·large 중 하나를 고름
+[shipping_profiles.JP]
+small = 8000                 # 아크릴·키링·문구 등 소형·경량
+medium = 15000               # 시계·의류·다이어리 등
+large = 25000                # 텀블러·가방 등 부피 큰 것
+
+[shipping_profiles.US]
+small = 18000
+medium = 28000
+large = 45000
+
+# ------------------------------------------------------------
+[fx]
+auto = true                  # frankfurter(ECB) 자동 조회
+[fx.manual_krw]              # 자동 조회 실패 시 사용 (통화 1단위당 원화). 새 통화는 여기 추가
+JPY = 9.4
+USD = 1400.0
+
+[costs]
+card_fx_fee_rate = 0.015
+packaging_krw = 1000         # 개당
+domestic_shipping_krw = 0    # 1회 배송당 (배대지 직배송이면 0)
+
+[customs]
+vat_rate = 0.10
+include_duty_if_over = true
+
+[pricing]                    # 카테고리에서 덮어쓸 수 있음
+min_margin_krw = 20000
+min_margin_rate = 0.10
+round_to = 1000
+price_ending = 900
+max_price_multiple = 2.0
+
+[alerts]
+webhook_url = ""             # Slack 또는 Discord → settings.local.toml 에 입력
+price_change_rate = 0.03
+
+# ------------------------------------------------------------
+#  판매 마켓 - 키 이름이 products.csv 의 my_price_<키> 열과 연결됨
+#  새 마켓: 섹션 추가 + products.csv에 my_price_<키> 열 추가
+# ------------------------------------------------------------
+[markets.coupang]
+name = "쿠팡"
+fee_rate = 0.109             # 카테고리별 4~10.9%, VAT 별도 → Wing에서 확인
+fee_vat_excluded = true
+
+[markets.naver]
+name = "스마트스토어"
+fee_rate = 0.0603            # 결제 3.30% + 판매 2.73%, VAT 별도
+fee_vat_excluded = true
