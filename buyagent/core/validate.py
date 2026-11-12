@@ -45,6 +45,9 @@ def validate(cfg: dict, specs: list[Spec], registry: dict, base: Path) -> list[t
             missing = [k for k in cls.required_keys if not conf.get(k)]
             if missing:
                 warn(f"소스 {name}: 키 미입력({', '.join(missing)}) → settings.local.toml 에 입력")
+            soft = [k for k in cls.recommended_keys if not conf.get(k)]
+            if soft and not missing:
+                warn(f"소스 {name}: {', '.join(soft)} 비어 있음 → 없이 시도함. 거절되면 python main.py --probe 로 확인")
             try:
                 if float(conf.get("min_interval", 1.0)) < 1.0:
                     warn(f"소스 {name}: min_interval {conf['min_interval']}초 → 초당 1회 제한에 걸릴 수 있음")
@@ -144,6 +147,16 @@ def validate(cfg: dict, specs: list[Spec], registry: dict, base: Path) -> list[t
         if (not s.discover and not s.must_include and not s.jan
                 and cats.get(s.category, {}).get("allowed")):
             warn(f"{label}: must_include 와 jan 이 모두 비어 있음 → 엉뚱한 상품이 최저가로 잡힐 수 있음")
+
+    # ---- 신상 발견: 최신순 정렬을 지원하는 소스가 있어야 함 ----
+    newest_ok = {n for n in src_info if registry[n].supports_newest}
+    for s in (x for x in specs if x.discover):
+        label = f"신상 {s.name}"
+        bad = [x for x in s.sources if x in registry and not registry[x].supports_newest]
+        if bad:
+            warn(f"{label}: {', '.join(bad)} 는 최신순 정렬이 없어 신상 발견에서 제외됨")
+        if not ((set(s.sources) if s.sources else set(src_info)) & newest_ok):
+            warn(f"{label}: 최신순을 지원하는 소스(예: rakuten)가 없어 신상 검색이 안 됨")
 
     # ---- 단어장 ----
     for w in cfg.get("glossary_unknown", []):

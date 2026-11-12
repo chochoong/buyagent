@@ -13,7 +13,7 @@
 [sources.rakuten]
 enabled = true
 application_id = ""          # → settings.local.toml 에 입력
-access_key = ""              # → settings.local.toml 에 입력
+access_key = ""              # → settings.local.toml 에 입력 (없으면 비워 둠)
 endpoint = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601"
 hits = 30
 default_shipping = 800       # 배송비 별도 상품의 가정 배송비 (엔)

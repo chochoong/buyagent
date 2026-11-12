@@ -11,16 +11,20 @@ class Rakuten(Source):
     name = "rakuten"
     currency = "JPY"
     origin = "JP"
-    required_keys = ("application_id", "access_key")
+    required_keys = ("application_id",)
+    recommended_keys = ("access_key",)   # 발급 화면에 없으면 비워 두고 --probe 로 확인
 
     def search(self, q: Query) -> list[Offer]:
-        d = self.get(self.conf["endpoint"], {
-            "applicationId": self.conf["application_id"], "accessKey": self.conf["access_key"],
+        params = {
+            "applicationId": self.conf["application_id"],
             "keyword": q.jan or q.keyword,
             "availability": 0,                 # 품절도 받아서 재입고 감지에 사용
             "sort": "-updateTimestamp" if q.newest else "+itemPrice",
             "hits": self.conf.get("hits", 30), "format": "json", "formatVersion": 2,
-        })
+        }
+        if self.conf.get("access_key"):
+            params["accessKey"] = self.conf["access_key"]
+        d = self.get(self.conf["endpoint"], params)
         out = []
         for it in d.get("Items", []):
             free = it.get("postageFlag", 1) == 0           # 0 = 送料込み

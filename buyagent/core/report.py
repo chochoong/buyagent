@@ -83,9 +83,10 @@ def _chunks(lines: list[str], limit: int) -> Iterator[str]:
         yield buf
 
 
-def send_webhook(url: str, lines: list[str]) -> None:
+def send_webhook(url: str, lines: list[str]) -> bool:
+    """전송 성공하면 True"""
     if not url or not lines:
-        return
+        return False
     discord = "discord" in url
     limit = 1900 if discord else 3500            # Discord 2000자 제한, Slack은 여유 있게
     for i, text in enumerate(_chunks(["🛒 구매대행 모니터 알림"] + lines, limit)):
@@ -95,4 +96,5 @@ def send_webhook(url: str, lines: list[str]) -> None:
             post_json(url, {"content": text} if discord else {"text": text})
         except Exception as e:
             print(f"[경고] 웹훅 전송 실패: {e}", file=sys.stderr)
-            return
+            return False
+    return True

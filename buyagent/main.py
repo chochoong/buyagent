@@ -7,6 +7,8 @@
   python main.py --bundle 5       # 5개 묶음 배송 기준으로 개당 원가 계산
   python main.py --only SBTQ041   # 특정 상품만 (ID 일부 일치)
   python main.py --check          # 설정·카탈로그 점검만
+  python main.py --probe          # API 키 넣은 뒤 검색 1번으로 확인 (--probe "검색어")
+  python main.py --test-alert     # 웹훅 테스트 메시지
 
 확장 방법
   - 상품 추가        → catalog/products.csv 에 한 줄 추가 (엑셀 편집 가능)
@@ -54,6 +56,10 @@ class Runner:
     def fetch(self, spec: Spec, newest: bool) -> tuple[list[Offer], list[str]]:
         names = list(self.sources) if (self.demo or not spec.sources) else spec.sources
         offers, errors = [], []
+        if newest:      # 최신순 정렬이 없는 소스(야후)는 신상 발견에서 제외
+            names = [n for n in names if n not in self.sources or self.sources[n].supports_newest]
+            if not names:
+                errors.append("최신순 검색을 지원하는 소스 없음 (신상 발견은 rakuten 필요)")
         for n in names:
             src = self.sources.get(n)
             if src is None:
@@ -154,6 +160,63 @@ def check(cfg: dict, specs: list[Spec], all_specs: list[Spec]) -> int:
     return 1 if errors else 0
 
 
+def test_alert(cfg: dict) -> int:
+    """웹훅으로 테스트 메시지 1건 전송"""
+    url = cfg["alerts"].get("webhook_url", "")
+    if not url:
+        print("webhook_url 이 비어 있음 → config/settings.local.toml 의 [alerts] webhook_url 에 입력하세요")
+        return 1
+    kind = "Discord" if "discord" in url else "Slack"
+    ok = send_webhook(url, [f"테스트 알림입니다 ({datetime.now():%Y-%m-%d %H:%M})",
+                            "• 이 메시지가 보이면 알림 설정 완료"])
+    print(f"{kind} 웹훅 전송 {'성공 → 채널을 확인하세요' if ok else '실패 (위 오류 참고)'}")
+    return 0 if ok else 1
+
+
+def _raw_items(raw: dict) -> list[dict]:
+    """API 응답 원문에서 상품 목록(Items, hits 등) 찾기"""
+    for v in raw.values():
+        if isinstance(v, list) and v and isinstance(v[0], dict):
+            return v
+    return []
+
+
+def probe(cfg: dict, specs: list[Spec], keyword: str) -> int:
+    """API 키를 넣은 직후 확인용: 소스마다 검색 1번 → 응답·변환 결과 출력"""
+    target = next((s for s in specs if not s.discover and s.keyword), None)
+    q = Query(keyword or (target.keyword if target else "セイコー"),
+              "" if keyword or not target else target.jan)
+    print(f"\n[API 확인] 검색어: {q.jan or q.keyword}")
+    fail = 0
+    for name, conf in cfg.get("sources", {}).items():
+        cls = REGISTRY.get(name)
+        if not cls or name == "demo":
+            continue
+        src = cls(conf, cfg)
+        print(f"\n■ {name}")
+        if not src.ready():
+            missing = [k for k in cls.required_keys if not conf.get(k)]
+            print(f"  건너뜀: {'꺼져 있음' if not conf.get('enabled') else '키 미입력 ' + ', '.join(missing)}")
+            continue
+        try:
+            offers = src.search(q)
+        except Exception as e:
+            fail += 1
+            print(f"  ❌ 실패: {e}")
+            continue
+        items = _raw_items(src.last_raw)
+        print(f"  ✅ 응답 OK: 원문 {len(items)}건 → 변환 {len(offers)}건")
+        if items:
+            print(f"  원문 필드: {', '.join(sorted(items[0]))}")
+        for o in offers[:3]:
+            print(f"  - {o.name[:50]}")
+            print(f"    {o.price:,.0f} {o.currency} | 배송 {'무료' if o.shipping_known else '별도(가정)'}"
+                  f" | {'재고있음' if o.in_stock else '품절'} | {o.shop} | JAN {o.jan or '-'}")
+        if items and not offers:
+            print("  ⚠ 원문은 있는데 변환 결과가 0건 → 필드 이름이 바뀌었을 수 있음 (위 원문 필드를 알려주세요)")
+    return 1 if fail else 0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="구매대행 모니터 v3")
     ap.add_argument("--demo", action="store_true")
@@ -161,6 +224,9 @@ def main() -> None:
     ap.add_argument("--only", default="", help="ID에 이 문자열이 들어간 상품만")
     ap.add_argument("--settings", default="", help="settings.toml 경로")
     ap.add_argument("--check", action="store_true", help="설정 점검만")
+    ap.add_argument("--test-alert", action="store_true", help="웹훅으로 테스트 메시지 전송")
+    ap.add_argument("--probe", nargs="?", const="", default=None, metavar="검색어",
+                    help="API 키 확인: 소스마다 검색 1번 해서 응답 출력")
     args = ap.parse_args()
 
     cfg = load_config(BASE, Path(args.settings) if args.settings else None)
@@ -168,6 +234,10 @@ def main() -> None:
     specs = [s for s in all_specs if args.only in s.id]
     if args.check:
         sys.exit(check(cfg, specs, all_specs))
+    if args.test_alert:
+        sys.exit(test_alert(cfg))
+    if args.probe is not None:
+        sys.exit(probe(cfg, specs, args.probe))
 
     warn_unknown_words(cfg)
     n_err = sum(lv == ERROR for lv, _ in validate(cfg, all_specs, REGISTRY, BASE))

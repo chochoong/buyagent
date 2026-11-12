@@ -11,10 +11,10 @@
 
 [sources.rakuten]
 application_id = ""
-access_key = ""
+access_key = ""      # 발급 화면에 없으면 비워 두고 python main.py --probe 로 확인
 
 [sources.yahoo]
 app_id = ""          # Yahoo! JAPAN 'Client ID(アプリケーションID)'
 
 [alerts]
-webhook_url = ""     # Slack 또는 Discord 웹훅 주소
+webhook_url = ""     # Slack 또는 Discord 웹훅 주소 → python main.py --test-alert 로 확인

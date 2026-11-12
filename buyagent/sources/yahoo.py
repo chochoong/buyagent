@@ -12,10 +12,11 @@ class YahooShopping(Source):
     currency = "JPY"
     origin = "JP"
     required_keys = ("app_id",)
+    supports_newest = False     # 정렬은 -score/+price/-price/-review_count 뿐 → 신상 발견은 라쿠텐으로
 
     def search(self, q: Query) -> list[Offer]:
         params = {"appid": self.conf["app_id"], "results": self.conf.get("results", 30),
-                  "sort": "-score" if q.newest else "+price", "condition": "new"}
+                  "sort": "+price", "condition": "new"}
         if q.jan:
             params["jan_code"] = q.jan
         else:

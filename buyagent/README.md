@@ -22,6 +22,7 @@ buyagent/
 │   ├── yahoo.py            Yahoo! 쇼핑 (일본)
 │   ├── demo.py             예시 데이터 (--demo)
 │   └── _template.py        새 쇼핑몰 만들 때 복사할 템플릿
+├── tests/                  회귀 테스트 (python -m unittest)
 └── core/                   공통 로직 (평소엔 건드릴 일 없음)
     ├── rules.py            판매 가능 여부 판단
     ├── pricing.py          원가·관부가세·권장가 계산
@@ -38,6 +39,9 @@ python main.py --check           # 설정과 상품 목록 점검 (차단 상품
 python main.py                   # 실제 실행
 python main.py --bundle 5        # 5개를 한 번에 배송받는 기준으로 개당 원가 계산
 python main.py --only chiikawa   # ID에 'chiikawa'가 들어간 것만 실행
+python main.py --probe           # API 키 확인: 쇼핑몰마다 검색 1번 (--probe "검색어")
+python main.py --test-alert      # 웹훅으로 테스트 메시지 보내기
+python -m unittest               # 코드 고친 뒤 기존 기능이 그대로인지 확인
 ```
 
 Python 3.11 이상이 필요하고, 다른 패키지는 설치하지 않아도 됩니다.
@@ -48,6 +52,12 @@ API 키와 웹훅 주소는 `config/settings.local.toml`에 넣어요. 이 파�
 
 1. `config/settings.local.toml.example`을 복사해서 이름을 `settings.local.toml`로 바꿔요.
 2. 키를 채워요. 여기 쓴 값이 `settings.toml`의 같은 항목을 덮어써요.
+3. `python main.py --probe`로 확인해요. 쇼핑몰마다 검색을 1번 해서 응답이 오는지, 가격·재고·JAN이 제대로 읽히는지 보여줘요. 거절되면 쇼핑몰이 보낸 사유가 그대로 나와요.
+4. 알림을 쓰려면 `[alerts] webhook_url`을 넣고 `python main.py --test-alert`로 메시지가 오는지 확인해요.
+
+- **Yahoo! 쇼핑:** https://e.developer.yahoo.co.jp/register 에서 앱을 등록하면 나오는 Client ID를 `app_id`에 넣어요.
+- **라쿠텐:** https://webservice.rakuten.co.jp/ 에서 앱을 등록하면 나오는 `applicationId`를 넣어요. access key가 함께 나오면 `access_key`에도 넣고, 없으면 비워 둔 채 `--probe`로 확인해요.
+- **Discord 웹훅:** 채널 설정 → 연동 → 웹후크 → 새 웹후크 → URL 복사.
 
 ### 설정 점검 (`--check`)
 
@@ -153,6 +163,10 @@ schtasks /Create /SC HOURLY /TN buyagent /TR "cmd /c cd /d C:\workspace\buyagent
 - **항상 알림:** 품절, 재입고, 원가 변동 (`price_change_rate` 이상), 신상품
 - **처음 한 번만 알림:** 판매처 확인, 가격 경쟁력, 관부가세, 마진 미달, 차단 같은 상태 경고. 금액만 조금 바뀐 같은 경고는 다시 보내지 않고, 경고가 사라졌다가 다시 생기면 다시 알려요.
 - 메시지가 길면 Discord(1900자), Slack(3500자) 단위로 나눠서 보내요.
+
+### 신상 발견과 쇼핑몰
+
+신상 발견은 최신순 정렬이 필요해서 **라쿠텐에서만** 검색해요. Yahoo! 쇼핑 API에는 최신순 정렬이 없어서(추천순·가격순·리뷰순만 지원) 신상 발견에서는 자동으로 빠져요. 고정 상품 최저가 감시에는 두 곳 모두 쓰여요.
 
 ### API 호출 제한
 
