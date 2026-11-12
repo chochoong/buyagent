@@ -5,6 +5,7 @@ buyagent/config/settings.local.toml
 buyagent/history*.db
 buyagent/reports/
 buyagent/run.log
+buyagent/health.json
 *.log
 
 # 파이썬 캐시

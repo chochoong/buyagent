@@ -9,6 +9,8 @@
 ```
 buyagent/
 ├── main.py                 실행 파일
+├── run.bat                 1회 실행 + run.log 기록 (작업 스케줄러용)
+├── schedule.bat            작업 스케줄러에 매시간 실행 등록
 ├── catalog/
 │   ├── products.csv        ★ 감시할 상품 목록 (엑셀로 편집)
 │   └── discover.csv        ★ 신상품 발견용 검색어
@@ -144,11 +146,11 @@ except = ["특전포함"]          # → ["特典付き", "特典付", "特典�
 
 ## 자동 실행 (매시간)
 
-**Windows (작업 스케줄러)** — 명령 프롬프트에서 한 번 실행:
+**Windows:** `schedule.bat`을 더블클릭하면 작업 스케줄러에 등록돼요. 매시간 `run.bat`이 실행되고, 결과는 `run.log`에 쌓여요.
 
-```
-schtasks /Create /SC HOURLY /TN buyagent /TR "cmd /c cd /d C:\workspace\buyagent\buyagent && python main.py >> run.log 2>&1"
-```
+- `run.bat`: 한 번 실행하고 출력을 `run.log`에 덧붙여요. 2MB가 넘으면 `run.old.log`로 옮겨요. 더블클릭해서 지금 바로 한 번 돌릴 수도 있어요.
+- 등록 해제: `schtasks /Delete /TN buyagent /F`
+- 등록 확인: `schtasks /Query /TN buyagent`
 
 **macOS / Linux (cron)**
 
@@ -157,6 +159,17 @@ schtasks /Create /SC HOURLY /TN buyagent /TR "cmd /c cd /d C:\workspace\buyagent
 ```
 
 출력은 항상 UTF-8로 저장돼요 (이모지가 있어도 로그 파일로 넘길 때 멈추지 않음).
+
+### 실행 실패 알림
+
+혼자 돌아가는 프로그램이 조용히 멈추지 않도록, 아래 경우엔 웹훅으로 **🚨 모니터 실행 실패** 알림이 가요.
+
+- 프로그램이 죽었을 때 (설정 파일 문법 오류 등). 설정을 못 읽어도 웹훅 주소만 따로 찾아서 보내요.
+- 쓸 수 있는 쇼핑몰이 없을 때 (키 미입력)
+- 감시 대상 **전부** 조회에 실패했을 때 (API 키 만료, 인터넷 끊김 등)
+- `--check` 기준 설정 오류가 있을 때
+
+같은 문제가 계속되면 매시간 보내지 않고 **하루에 한 번만** 다시 알려요. 문제가 해결되면 **✅ 정상 복구** 알림이 1번 가요. 상태는 `health.json`에 저장돼요.
 
 ### 알림 규칙
 

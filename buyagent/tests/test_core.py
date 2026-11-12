@@ -254,6 +254,75 @@ class TestSources(unittest.TestCase):
         self.assertIn("accessKey is required", out.getvalue(), "API 거절 사유가 그대로 보여야 함")
 
 
+# ---------------------------------------------------------------- 실행 상태 알림
+class TestHealth(TmpDirTest):
+    def test_sequence(self):
+        from datetime import datetime, timedelta
+        f = self.tmp / "health.json"
+        t = datetime(2026, 1, 1, 9, 0)
+        h = lambda p, dt=0: M.health_messages(p, t + timedelta(hours=dt), f)   # noqa: E731
+        self.assertEqual(h(""), [], "정상일 땐 아무 알림 없음")
+        self.assertIn("실행 실패", h("감시 5건 모두 조회 실패")[0])
+        self.assertEqual(h("감시 6건 모두 조회 실패", 1), [], "숫자만 다른 같은 문제는 재알림 안 함")
+        self.assertIn("아직 실패 중", h("감시 6건 모두 조회 실패", 25)[0], "하루 지나면 한 번 더")
+        self.assertEqual(h("감시 6건 모두 조회 실패", 26), [])
+        self.assertIn("실행 실패", h("프로그램 오류 X", 27)[0], "다른 문제로 바뀌면 바로 알림")
+        self.assertIn("정상 복구", h("", 28)[0])
+        self.assertEqual(h("", 29), [])
+
+
+class TestRunFailures(TmpDirTest):
+    """프로그램이 조용히 멈추지 않고 실패를 알리는지 (실제 DB·리포트 폴더는 건드리지 않음)"""
+
+    def setUp(self):
+        super().setUp()
+        self.s = FakeServer()
+        H._last_call.clear()
+        self.saved = (M.BASE, M.HEALTH_FILE, M.load_config, sys.argv)
+        M.BASE, M.HEALTH_FILE = self.tmp, self.tmp / "health.json"
+
+    def tearDown(self):
+        M.BASE, M.HEALTH_FILE, M.load_config, sys.argv = self.saved
+        self.s.close()
+        super().tearDown()
+
+    def _cfg(self, **rakuten):
+        c = cfg()
+        c["alerts"]["webhook_url"] = self.s.url + "/discord"
+        c["sources"] = {"rakuten": {"enabled": True, "min_interval": 0, "retries": 0,
+                                    "endpoint": self.s.url + "/rk", **rakuten}}
+        return c
+
+    def _main(self, c):
+        M.load_config = lambda *a, **k: c
+        sys.argv = ["main.py"]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as cm:
+                M.main()
+        return cm.exception.code
+
+    def test_no_sources_alerts(self):
+        self.assertEqual(self._main(self._cfg()), 1)      # 키 없음
+        self.assertIn("사용 가능한 소스가 없습니다", self.s.posts[0]["content"])
+
+    def test_crash_alerts(self):
+        c = self._cfg(application_id="APP")
+        del c["markets"]                                   # 일부러 망가뜨림 → KeyError
+        self.assertEqual(self._main(c), 1)
+        self.assertIn("프로그램 오류", self.s.posts[0]["content"])
+
+    def test_all_fetch_failed(self):
+        c = self._cfg(application_id="APP")
+        self.s.responses = [(401, {"error": "invalid key"})] * 20
+        args = type("A", (), {"demo": False, "bundle": 0})()
+        specs = [Spec(id="a", name="a", category="watch", keyword="x", must_include=["x"]),
+                 Spec(id="b", name="b", category="watch", keyword="y", must_include=["y"])]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            problem = M.run_all(c, args, specs, specs)
+        self.assertIn("2건 모두 조회 실패", problem)
+        self.assertIn("invalid key", problem)
+
+
 # ---------------------------------------------------------------- 설정 점검
 class TestValidate(unittest.TestCase):
     def _issues(self, c, specs=None):

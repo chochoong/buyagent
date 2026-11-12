@@ -19,7 +19,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -33,13 +35,13 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from core.config import load_config, load_specs          # noqa: E402
+from core.config import load_config, load_specs, load_toml  # noqa: E402
 from core.fx import FX                                     # noqa: E402
 from core.models import Offer, Query, Result, Spec         # noqa: E402
 from core.pricing import price_offer                       # noqa: E402
 from core.report import fmt_result, send_webhook, write_csv  # noqa: E402
 from core.rules import category_label, check_spec, filter_offers, warnings_for  # noqa: E402
-from core.storage import Store                             # noqa: E402
+from core.storage import Store, alert_key                  # noqa: E402
 from core.validate import ERROR, validate                  # noqa: E402
 from sources import REGISTRY, build_sources                # noqa: E402
 
@@ -217,40 +219,78 @@ def probe(cfg: dict, specs: list[Spec], keyword: str) -> int:
     return 1 if fail else 0
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description="구매대행 모니터 v3")
-    ap.add_argument("--demo", action="store_true")
-    ap.add_argument("--bundle", type=int, default=0, help="묶음 배송 수량 (개당 원가 계산)")
-    ap.add_argument("--only", default="", help="ID에 이 문자열이 들어간 상품만")
-    ap.add_argument("--settings", default="", help="settings.toml 경로")
-    ap.add_argument("--check", action="store_true", help="설정 점검만")
-    ap.add_argument("--test-alert", action="store_true", help="웹훅으로 테스트 메시지 전송")
-    ap.add_argument("--probe", nargs="?", const="", default=None, metavar="검색어",
-                    help="API 키 확인: 소스마다 검색 1번 해서 응답 출력")
-    args = ap.parse_args()
+# ---------------------------------------------------------------- 실행 상태 알림
+HEALTH_FILE = BASE / "health.json"
+REMIND_HOURS = 24
 
-    cfg = load_config(BASE, Path(args.settings) if args.settings else None)
-    all_specs = load_specs(BASE, cfg["markets"])
-    specs = [s for s in all_specs if args.only in s.id]
-    if args.check:
-        sys.exit(check(cfg, specs, all_specs))
-    if args.test_alert:
-        sys.exit(test_alert(cfg))
-    if args.probe is not None:
-        sys.exit(probe(cfg, specs, args.probe))
 
+def health_messages(problem: str, now: datetime | None = None, path: Path | None = None) -> list[str]:
+    """실행 상태가 바뀔 때만 알림: 문제 발생·문제 변경 시 1번, 계속 실패 중이면 하루 1번, 해결되면 '복구' 1번"""
+    now = now or datetime.now()
+    path = path or HEALTH_FILE
+    try:
+        prev = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prev = {}
+    key = alert_key(problem) if problem else ""
+    msgs: list[str] = []
+    state = {"key": key, "since": prev.get("since", ""), "sent": prev.get("sent", "")}
+    if not problem:
+        if prev.get("key"):
+            msgs = [f"✅ 모니터 정상 복구 (실패 시작: {prev.get('since', '?')})"]
+        state = {"key": "", "since": "", "sent": ""}
+    else:
+        ts = now.strftime("%Y-%m-%d %H:%M")
+        if key != prev.get("key"):
+            msgs = [f"🚨 모니터 실행 실패: {problem}"]
+            state = {"key": key, "since": ts, "sent": ts}
+        else:
+            try:
+                last = datetime.strptime(prev.get("sent", ""), "%Y-%m-%d %H:%M")
+            except ValueError:
+                last = datetime.min
+            if (now - last).total_seconds() >= REMIND_HOURS * 3600:
+                msgs = [f"🚨 아직 실패 중 ({prev.get('since', '?')}부터): {problem}"]
+                state["sent"] = ts
+    try:
+        path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return msgs
+
+
+def _fallback_webhook() -> str:
+    """설정 파일을 못 읽어서 죽은 경우에도 실패 알림은 보내도록 웹훅 주소만 따로 찾음"""
+    for name in ("settings.local.toml", "settings.toml"):
+        try:
+            url = load_toml(BASE / "config" / name).get("alerts", {}).get("webhook_url", "")
+        except Exception:
+            continue
+        if url:
+            return url
+    return ""
+
+
+# ---------------------------------------------------------------- 실행
+def run_all(cfg: dict, args, specs: list[Spec], all_specs: list[Spec]) -> str:
+    """감시 1회 실행. 문제가 있으면 설명 문자열, 없으면 "" 반환"""
+    problems: list[str] = []
     warn_unknown_words(cfg)
     n_err = sum(lv == ERROR for lv, _ in validate(cfg, all_specs, REGISTRY, BASE))
     if n_err:
         print(f"[경고] 설정 오류 {n_err}건 → python main.py --check 로 확인하세요", file=sys.stderr)
+        problems.append(f"설정 오류 {n_err}건 → python main.py --check 로 확인")
     run = Runner(cfg, args.demo, args.bundle)
     if not run.sources:
-        sys.exit("사용 가능한 소스가 없습니다. config/settings.local.toml 에 API 키를 넣거나 --demo로 실행하세요.")
+        msg = "사용 가능한 소스가 없습니다. config/settings.local.toml 에 API 키를 넣거나 --demo로 실행하세요."
+        print(msg, file=sys.stderr)
+        return " / ".join(problems + [msg])
     markets = [m["name"] for m in cfg["markets"].values()]
     print(f"\n환율: {run.fx.summary()}\n소스: {', '.join(run.sources)}")
 
     rows: list[tuple[str, Result]] = []
     notify: list[str] = []
+    tried, failures = 0, []     # 전부 실패하면 키 만료·네트워크 문제일 가능성 → 실행 실패로 알림
 
     print("\n" + "=" * 72 + "\n[고정 모니터링 상품]")
     for spec in (s for s in specs if not s.discover):
@@ -258,6 +298,10 @@ def main() -> None:
             r = run.run_product(spec)
         except Exception as e:          # 상품 하나가 실패해도 나머지는 계속
             r = Result(spec=spec, failed=True, alerts=[f"처리 중 오류: {type(e).__name__}: {e}"])
+        if not r.blocked_reason:
+            tried += 1
+            if r.failed:
+                failures.append(next((a for a in r.alerts if "실패" in a or "오류" in a), "조회 실패"))
         print(f"\n■ {spec.name}  ({category_label(cfg, spec.category)})")
         print("\n".join(fmt_result(r)))
         rows.append(("고정", r))
@@ -273,6 +317,10 @@ def main() -> None:
             new, msg = run.run_discover(spec)
         except Exception as e:
             new, msg = [], f"처리 중 오류: {type(e).__name__}: {e}"
+        if not msg.startswith("건너뜀"):
+            tried += 1
+            if msg.startswith(("조회 실패", "처리 중 오류")):
+                failures.append(msg)
         print(f"\n▶ {spec.name}  ({msg})")
         for r in new:
             print(f"  ✨ {r.offer.name}")
@@ -287,6 +335,49 @@ def main() -> None:
     print(f"\n리포트 저장: {out}\n")
     if not args.demo:
         send_webhook(cfg["alerts"].get("webhook_url", ""), notify)
+    if tried and len(failures) == tried:
+        problems.append(f"감시 {tried}건 모두 조회 실패 (API 키 만료·네트워크 확인) → {failures[0]}")
+    return " / ".join(problems)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="구매대행 모니터 v3")
+    ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--bundle", type=int, default=0, help="묶음 배송 수량 (개당 원가 계산)")
+    ap.add_argument("--only", default="", help="ID에 이 문자열이 들어간 상품만")
+    ap.add_argument("--settings", default="", help="settings.toml 경로")
+    ap.add_argument("--check", action="store_true", help="설정 점검만")
+    ap.add_argument("--test-alert", action="store_true", help="웹훅으로 테스트 메시지 전송")
+    ap.add_argument("--probe", nargs="?", const="", default=None, metavar="검색어",
+                    help="API 키 확인: 소스마다 검색 1번 해서 응답 출력")
+    args = ap.parse_args()
+
+    cfg: dict | None = None
+    try:
+        cfg = load_config(BASE, Path(args.settings) if args.settings else None)
+        all_specs = load_specs(BASE, cfg["markets"])
+        specs = [s for s in all_specs if args.only in s.id]
+        if args.check:
+            sys.exit(check(cfg, specs, all_specs))
+        if args.test_alert:
+            sys.exit(test_alert(cfg))
+        if args.probe is not None:
+            sys.exit(probe(cfg, specs, args.probe))
+        print(f"===== {datetime.now():%Y-%m-%d %H:%M:%S} 실행 =====")
+        problem = run_all(cfg, args, specs, all_specs)
+    except Exception as e:              # 프로그램 전체가 죽는 경우 (설정 파일 문법 오류 등)
+        traceback.print_exc()
+        problem = f"프로그램 오류 {type(e).__name__}: {e}"
+
+    if args.demo:
+        sys.exit(1 if problem else 0)
+    msgs = health_messages(problem)
+    if msgs:
+        url = (cfg or {}).get("alerts", {}).get("webhook_url", "") or _fallback_webhook()
+        send_webhook(url, msgs)
+    if problem:
+        print(f"[실패] {problem}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
