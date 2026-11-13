@@ -1,6 +1,6 @@
-id,name,category,unit_price,currency,qty,cn_shipping,weight_kg,size_cm,batch,cert_cost_krw,price_coupang,price_naver,naver_query,naver_must,naver_exclude,url,active,memo
-keycap-pbt-cherry,PBT 체리 프로파일 키캡 세트,keycap,38,CNY,50,20,0.6,33x13x5,A,,29900,,PBT 체리 키캡,키캡,1개|낱개|키보드 본체,,Y,예시값 (1688 실제 가격으로 바꾸세요). price_naver 를 비우면 --market 이 채움
-switch-linear-70,리니어 스위치 70개입,key_switch,45,CNY,30,10,0.35,15x10x6,A,,24900,,리니어 스위치 70개,스위치,,,Y,예시값
-wristrest-wood-tkl,원목 손목받침 텐키리스용,desk_acc,28,CNY,30,10,0.5,38x10x3,A,,19900,,원목 키보드 손목받침,손목,마우스,,Y,예시값
-deskmat-900,데스크매트 900x400,desk_acc,15,CNY,50,15,0.45,42x8x8,B,,12900,,장패드 900x400,,,,Y,예시값 (돌돌 만 포장 크기)
-kb-wireless-75,75% 무선 기계식 키보드,keyboard,160,CNY,20,0,1.3,38x16x6,,,89000,87000,,,,,Y,예시값 → 인증 없이 사입 불가로 표시됨
+id,name,category,unit_price,currency,qty,cn_shipping,weight_kg,size_cm,batch,cert_cost_krw,price_coupang,price_naver,url,active,memo
+keycap-pbt-cherry,PBT 체리 프로파일 키캡 세트,keycap,38,CNY,50,20,0.6,33x13x5,A,,29900,28900,,Y,예시값 (1688 실제 가격으로 바꾸세요)
+switch-linear-70,리니어 스위치 70개입,key_switch,45,CNY,30,10,0.35,15x10x6,A,,24900,23900,,Y,예시값
+wristrest-wood-tkl,원목 손목받침 텐키리스용,desk_acc,28,CNY,30,10,0.5,38x10x3,A,,19900,18900,,Y,예시값
+deskmat-900,데스크매트 900x400,desk_acc,15,CNY,50,15,0.45,42x8x8,B,,12900,11900,,Y,예시값 (돌돌 만 포장 크기)
+kb-wireless-75,75% 무선 기계식 키보드,keyboard,160,CNY,20,0,1.3,38x16x6,,,89000,87000,,Y,예시값 → 인증 없이 사입 불가로 표시됨

@@ -17,8 +17,8 @@ access_key = ""      # 발급 화면에 없으면 비워 두고 python main.py -
 app_id = ""          # Yahoo! JAPAN 'Client ID(アプリケーションID)'
 
 [naver]
-client_id = ""       # 네이버 개발자센터 Client ID
-client_secret = ""   # 네이버 개발자센터 Client Secret
+client_id = ""       # NAVER API HUB Client ID (네이버 클라우드 콘솔 → 인증 정보)
+client_secret = ""   # NAVER API HUB Client Secret
 
 [alerts]
 webhook_url = ""     # Slack 또는 Discord 웹훅 주소 → python main.py --test-alert 로 확인

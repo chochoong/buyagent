@@ -10,7 +10,7 @@
 buyagent/
 ├── main.py                 실행 파일 (구매대행 감시)
 ├── sourcing.py             사입 원가 계산기 (중국 1688 등)
-├── research.py             상품 발굴: 네이버 시세·경쟁·검색 추이
+├── research.py             상품 발굴: 네이버 검색 추이 (NAVER API HUB)
 ├── run.bat                 1회 실행 + run.log 기록 (작업 스케줄러용)
 ├── schedule.bat            작업 스케줄러에 매시간 실행 등록
 ├── catalog/
@@ -102,26 +102,16 @@ python sourcing.py --offline    # 환율 자동 조회 없이
 - **부가세:** 일반과세자는 수입 부가세를 환급받아서 원가에서 빠지고, 판매가의 1/11은 납부하는 것으로 계산해요. 간이과세자는 `[tax] type = "simple"`으로 바꿔요.
 - **사입 금지:** `categories.toml`에서 `bulk_ok = false`인 카테고리(키보드 본체 등 KC 대상)는 ⛔로 표시돼요.
 
-### 네이버 시세·상품 발굴 (네이버 키 필요)
-
-키 발급: https://developers.naver.com → Application → 애플리케이션 등록
-- 사용 API: **검색**, **데이터랩(검색어트렌드)**
-- 환경: WEB 설정 → `http://localhost`
-- Client ID와 Client Secret을 `settings.local.toml`의 `[naver]`에 넣어요. 무료이고 하루 2만5천 회까지 쓸 수 있어요.
+### 상품 발굴: 네이버 검색 추이 (`python research.py`)
 
 ```bash
-python research.py 키캡 손목받침 장패드    # 후보 키워드 시장 조사
-python sourcing.py --market                 # 사입 상품의 네이버 시세로 마진 계산
+python research.py 키캡 손목받침 장패드 기계식키보드
 ```
 
-- **`research.py`:** 키워드마다 가격대(최저, 하위 25%, 중간), 네이버 쇼핑 상품 수, 판매처 수, **해외직구 비율**, **최근 3개월 검색 추이**를 보여줘요.
-  - 해외직구 비율이 높으면 국내 재고(사입)로 빠른 배송을 내세울 수 있어요.
-  - 검색이 늘고 있는데 판매처가 적은 키워드가 기회예요.
-- **`sourcing.py --market`:** `sourcing.csv`의 `price_naver`가 비어 있으면 네이버 시세(기본: 하위 25% 가격)로 채워서 마진을 계산해요.
-  - `naver_query`: 검색어
-  - `naver_must`: 상품명에 꼭 있어야 할 단어 (`|`로 구분)
-  - `naver_exclude`: 빼야 할 단어 (`1개|낱개` 등)
-  - 엉뚱한 상품이 섞이면 시세가 틀어지니, 결과에 나온 대표 상품을 보고 조정하세요.
+키워드마다 최근 12개월 월별 검색량 그래프, 가장 많이 찾는 달, 최근 3개월 증감을 보여줘요. 한 번에 5개씩 묶어서 조회해서, 같은 묶음 안에서는 어느 키워드가 더 많이 검색되는지도 비교할 수 있어요.
+
+- **키 발급:** 네이버 클라우드 플랫폼(https://www.ncloud.com) 가입 → 콘솔 → **NAVER API HUB** → Application 등록에서 **검색어 트렌드**를 골라요. 발급된 Client ID와 Client Secret을 `settings.local.toml`의 `[naver]`에 넣어요.
+- **가격은 못 가져와요:** 네이버 쇼핑 검색 API(상품·가격)는 **2026년 7월 31일에 종료**됐고 대체 API가 없어요. 국내 판매가는 `sourcing.csv`의 `price_coupang`, `price_naver`에 직접 적어 주세요.
 
 ### API 없는 쇼핑몰 가격 직접 입력 (키보드 구매대행 등)
 

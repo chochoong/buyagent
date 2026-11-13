@@ -49,6 +49,8 @@ class FakeServer:
         self.gets: list[tuple[float, str]] = []
         self.posts: list[dict] = []
         self.post_responses: list[dict] = []
+        self.post_paths: list[str] = []
+        self.post_headers: list[dict] = []
         self.headers: list[dict] = []
         outer = self
 
@@ -68,6 +70,8 @@ class FakeServer:
 
             def do_POST(self):
                 n = int(self.headers["Content-Length"])
+                outer.post_paths.append(self.path)
+                outer.post_headers.append(dict(self.headers))
                 outer.posts.append(json.loads(self.rfile.read(n)))
                 if outer.post_responses:
                     self.send_response(200)
@@ -444,73 +448,41 @@ class TestSourcing(unittest.TestCase):
         self.assertTrue(any("시장가" in a for a in ln.alerts))
 
 
-# ---------------------------------------------------------------- 네이버
-def _shop(total, items):
-    return {"total": total, "items": [
-        {"title": t, "lprice": str(p), "mallName": m, "productType": str(pt), "link": "l",
-         "category1": "디지털/가전", "category2": "PC주변기기"}
-        for t, p, m, pt in items]}
-
-
+# ---------------------------------------------------------------- 네이버 검색어 트렌드 (API HUB)
 class TestNaver(unittest.TestCase):
     def setUp(self):
         self.s = FakeServer()
-        H._last_call.clear()
         from core.naver import Naver
-        self.nv = Naver({"client_id": "ID", "client_secret": "SEC", "api_base": self.s.url,
-                         "min_interval": 0, "retries": 0, "display": 40})
+        self.nv = Naver({"client_id": "ID", "client_secret": "SEC", "api_base": self.s.url})
 
     def tearDown(self):
         self.s.close()
 
-    def test_market_stats_and_filters(self):
-        self.s.responses = [
-            (200, _shop(1200, [("<b>PBT</b> 체리 키캡 세트 &amp; 풀배열", 25000, "A", 1),
-                               ("PBT 키캡 1개 낱개", 1000, "B", 2),        # 제외 단어
-                               ("PBT 체리 키캡 중고", 9000, "C", 4),        # 중고 → 제외
-                               ("체리 키캡 세트", 19000, "D", 1),
-                               ("체리 키캡", 30000, "A", 3),
-                               ("체리 키캡 세트 LED", 22000, "E", 1)])),
-            (200, {"total": 1500, "items": []}),                          # 해외직구 포함 개수
-        ]
-        m = self.nv.market("PBT 체리 키캡", must=["키캡"], exclude_words=["낱개"])
-        self.assertEqual(m.items[0].title, "PBT 체리 키캡 세트 & 풀배열", "<b> 태그·HTML 문자 정리")
-        self.assertEqual(m.prices, [19000, 22000, 25000, 30000])
-        self.assertEqual((m.stat("min"), m.stat("p25"), m.stat("median")), (19000, 19000, 23500))
-        self.assertEqual(m.malls, 3)
-        self.assertEqual(m.excluded, 2)
-        self.assertAlmostEqual(m.cb_share, 0.2)
-        self.assertIn("exclude=used%3Arental%3Acbshop", self.s.gets[0][1])
-        self.assertEqual(self.s.headers[0].get("X-Naver-Client-Id"), "ID")
-
     def test_trend(self):
-        from core.naver import trend_change
+        from core.naver import sparkline, trend_change
+        vals = [10] * 9 + [20] * 3
         self.s.post_responses = [{"results": [
-            {"title": "키캡", "data": [{"ratio": r} for r in [10, 10, 10, 10, 10, 10, 10, 10, 10, 20, 20, 20]]}]}]
+            {"title": "키캡", "data": [{"period": f"2026-{m:02d}-01", "ratio": v} for m, v in enumerate(vals, 1)]}]}]
         t = self.nv.trend(["키캡"])
-        self.assertEqual(len(t["키캡"]), 12)
-        self.assertAlmostEqual(trend_change(t["키캡"]), 1.0)          # 3개월 평균 10 → 20
+        self.assertEqual([v for _, v in t["키캡"]], vals)
+        self.assertAlmostEqual(trend_change(vals), 1.0)          # 3개월 평균 10 → 20
         body = self.s.posts[0]
         self.assertEqual(body["timeUnit"], "month")
+        self.assertEqual(body["keywordGroups"][0], {"groupName": "키캡", "keywords": ["키캡"]})
         self.assertTrue(body["endDate"] < __import__("datetime").date.today().replace(day=1).isoformat(),
                         "이번 달(덜 끝난 달)은 빼고")
         self.assertIsNone(trend_change([1, 2]))
+        self.assertEqual(len(sparkline(vals)), 12)
 
-    def test_sourcing_market_fill(self):
-        import sourcing as SRC
-        c = cfg()
-        c["naver"] = {**self.nv.conf, "market_price": "p25"}
-        it = Item(id="k", name="키캡", category="keycap", unit_price=38, qty=50,
-                  market_prices={"coupang": 29900, "naver": 0})
-        fixed = Item(id="f", name="손목받침", category="desk_acc", unit_price=28, qty=30,
-                     market_prices={"coupang": 0, "naver": 18900})
-        self.s.responses = [(200, _shop(100, [("키캡 세트", 20000, "A", 1), ("키캡", 24000, "B", 1)])),
-                            (200, {"total": 100}),
-                            (200, _shop(50, [("손목받침", 15000, "A", 1)])), (200, {"total": 50})]
-        SRC.fill_market_prices(c, [it, fixed])
-        self.assertEqual(it.market_prices["naver"], 20000, "빈 칸은 네이버 시세로 채움")
-        self.assertEqual(fixed.market_prices["naver"], 18900, "직접 넣은 값은 그대로")
-        self.assertIn("최저 20,000", it.market_note)
+    def test_hub_path_headers_and_batches(self):
+        self.s.post_responses = [{"results": []}, {"results": []}]
+        self.nv.trend([f"k{i}" for i in range(7)])
+        self.assertEqual(len(self.s.posts), 2, "5개씩 나눠서 요청")
+        self.assertEqual(len(self.s.posts[0]["keywordGroups"]), 5)
+        self.assertEqual(self.s.post_paths[0], "/search-trend/v1/search")
+        h = {k.lower(): v for k, v in self.s.post_headers[0].items()}    # HTTP 헤더 이름은 대소문자 무관
+        self.assertEqual(h.get("x-ncp-apigw-api-key-id"), "ID")
+        self.assertEqual(h.get("x-ncp-apigw-api-key"), "SEC")
 
 
 # ---------------------------------------------------------------- 설정 점검

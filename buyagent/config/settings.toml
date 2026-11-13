@@ -91,16 +91,13 @@ price_ending = 900
 max_price_multiple = 2.0
 
 # ------------------------------------------------------------
-#  네이버 오픈 API (국내 시세·검색 추이) — python sourcing.py --market / python research.py
-#  키 발급: https://developers.naver.com → 애플리케이션 등록 (검색, 데이터랩(검색어트렌드))
+#  네이버 검색어 트렌드 (NAVER API HUB) — python research.py
+#  키 발급: 네이버 클라우드 플랫폼 콘솔 → NAVER API HUB → Application 등록 (검색어 트렌드)
+#  ※ 네이버 쇼핑 검색 API(상품·가격)는 2026-07-31 종료 → 국내 판매가는 직접 입력
 # ------------------------------------------------------------
 [naver]
-client_id = ""               # → settings.local.toml 에 입력
-client_secret = ""           # → settings.local.toml 에 입력
-display = 40                 # 시세 계산에 쓰는 정확도순 상위 상품 수 (최대 100)
-market_price = "p25"         # 시장가로 쓸 값: min(최저) / p25(하위 25%) / median(중간)
-min_interval = 0.2           # 호출 간격(초)
-retries = 2
+client_id = ""               # → settings.local.toml 에 입력 (API HUB Client ID)
+client_secret = ""           # → settings.local.toml 에 입력 (API HUB Client Secret)
 
 [alerts]
 webhook_url = ""             # Slack 또는 Discord → settings.local.toml 에 입력
