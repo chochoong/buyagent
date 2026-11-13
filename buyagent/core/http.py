@@ -60,8 +60,18 @@ def get_json(url: str, params: dict | None = None, headers: dict | None = None,
     raise RuntimeError(f"요청 실패 {base}")   # 도달하지 않음
 
 
-def post_json(url: str, payload: dict, timeout: int = 15) -> None:
+def post_json(url: str, payload: dict, headers: dict | None = None, timeout: int = 15) -> dict:
+    """JSON POST. 응답 본문이 JSON이면 돌려줌 (웹훅처럼 본문이 없으면 {})"""
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
-                                 headers={"Content-Type": "application/json", **UA},
+                                 headers={"Content-Type": "application/json", **UA, **(headers or {})},
                                  method="POST")
-    urllib.request.urlopen(req, timeout=timeout).read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode("utf-8", "ignore")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} {url.split('?')[0]}: "
+                           f"{e.read().decode('utf-8', 'ignore')[:200]}") from e
+    try:
+        return json.loads(body) if body.strip() else {}
+    except ValueError:
+        return {}

@@ -48,6 +48,8 @@ class FakeServer:
         self.responses: list[tuple[int, dict]] = []
         self.gets: list[tuple[float, str]] = []
         self.posts: list[dict] = []
+        self.post_responses: list[dict] = []
+        self.headers: list[dict] = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -56,6 +58,7 @@ class FakeServer:
 
             def do_GET(self):
                 outer.gets.append((time.monotonic(), self.path))
+                outer.headers.append(dict(self.headers))
                 code, body = outer.responses.pop(0) if outer.responses else (200, {"ok": 1})
                 self.send_response(code)
                 if code == 429:
@@ -66,8 +69,13 @@ class FakeServer:
             def do_POST(self):
                 n = int(self.headers["Content-Length"])
                 outer.posts.append(json.loads(self.rfile.read(n)))
-                self.send_response(204)
-                self.end_headers()
+                if outer.post_responses:
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(json.dumps(outer.post_responses.pop(0)).encode())
+                else:
+                    self.send_response(204)
+                    self.end_headers()
 
         self.srv = HTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.srv.server_port}"
@@ -434,6 +442,75 @@ class TestSourcing(unittest.TestCase):
         ln = calculate(self.c, SC, self.fx, [self.keycap(market_prices={"coupang": 15000})])[0]
         self.assertFalse(ln.quotes[0].ok_at_market)
         self.assertTrue(any("시장가" in a for a in ln.alerts))
+
+
+# ---------------------------------------------------------------- 네이버
+def _shop(total, items):
+    return {"total": total, "items": [
+        {"title": t, "lprice": str(p), "mallName": m, "productType": str(pt), "link": "l",
+         "category1": "디지털/가전", "category2": "PC주변기기"}
+        for t, p, m, pt in items]}
+
+
+class TestNaver(unittest.TestCase):
+    def setUp(self):
+        self.s = FakeServer()
+        H._last_call.clear()
+        from core.naver import Naver
+        self.nv = Naver({"client_id": "ID", "client_secret": "SEC", "api_base": self.s.url,
+                         "min_interval": 0, "retries": 0, "display": 40})
+
+    def tearDown(self):
+        self.s.close()
+
+    def test_market_stats_and_filters(self):
+        self.s.responses = [
+            (200, _shop(1200, [("<b>PBT</b> 체리 키캡 세트 &amp; 풀배열", 25000, "A", 1),
+                               ("PBT 키캡 1개 낱개", 1000, "B", 2),        # 제외 단어
+                               ("PBT 체리 키캡 중고", 9000, "C", 4),        # 중고 → 제외
+                               ("체리 키캡 세트", 19000, "D", 1),
+                               ("체리 키캡", 30000, "A", 3),
+                               ("체리 키캡 세트 LED", 22000, "E", 1)])),
+            (200, {"total": 1500, "items": []}),                          # 해외직구 포함 개수
+        ]
+        m = self.nv.market("PBT 체리 키캡", must=["키캡"], exclude_words=["낱개"])
+        self.assertEqual(m.items[0].title, "PBT 체리 키캡 세트 & 풀배열", "<b> 태그·HTML 문자 정리")
+        self.assertEqual(m.prices, [19000, 22000, 25000, 30000])
+        self.assertEqual((m.stat("min"), m.stat("p25"), m.stat("median")), (19000, 19000, 23500))
+        self.assertEqual(m.malls, 3)
+        self.assertEqual(m.excluded, 2)
+        self.assertAlmostEqual(m.cb_share, 0.2)
+        self.assertIn("exclude=used%3Arental%3Acbshop", self.s.gets[0][1])
+        self.assertEqual(self.s.headers[0].get("X-Naver-Client-Id"), "ID")
+
+    def test_trend(self):
+        from core.naver import trend_change
+        self.s.post_responses = [{"results": [
+            {"title": "키캡", "data": [{"ratio": r} for r in [10, 10, 10, 10, 10, 10, 10, 10, 10, 20, 20, 20]]}]}]
+        t = self.nv.trend(["키캡"])
+        self.assertEqual(len(t["키캡"]), 12)
+        self.assertAlmostEqual(trend_change(t["키캡"]), 1.0)          # 3개월 평균 10 → 20
+        body = self.s.posts[0]
+        self.assertEqual(body["timeUnit"], "month")
+        self.assertTrue(body["endDate"] < __import__("datetime").date.today().replace(day=1).isoformat(),
+                        "이번 달(덜 끝난 달)은 빼고")
+        self.assertIsNone(trend_change([1, 2]))
+
+    def test_sourcing_market_fill(self):
+        import sourcing as SRC
+        c = cfg()
+        c["naver"] = {**self.nv.conf, "market_price": "p25"}
+        it = Item(id="k", name="키캡", category="keycap", unit_price=38, qty=50,
+                  market_prices={"coupang": 29900, "naver": 0})
+        fixed = Item(id="f", name="손목받침", category="desk_acc", unit_price=28, qty=30,
+                     market_prices={"coupang": 0, "naver": 18900})
+        self.s.responses = [(200, _shop(100, [("키캡 세트", 20000, "A", 1), ("키캡", 24000, "B", 1)])),
+                            (200, {"total": 100}),
+                            (200, _shop(50, [("손목받침", 15000, "A", 1)])), (200, {"total": 50})]
+        SRC.fill_market_prices(c, [it, fixed])
+        self.assertEqual(it.market_prices["naver"], 20000, "빈 칸은 네이버 시세로 채움")
+        self.assertEqual(fixed.market_prices["naver"], 18900, "직접 넣은 값은 그대로")
+        self.assertIn("최저 20,000", it.market_note)
 
 
 # ---------------------------------------------------------------- 설정 점검

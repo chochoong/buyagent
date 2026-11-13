@@ -40,6 +40,10 @@ class Item:
     market_prices: dict[str, int] = field(default_factory=dict)   # 국내 시장 경쟁가
     url: str = ""
     memo: str = ""
+    naver_query: str = ""        # 네이버 시세 검색어 (비우면 name)
+    naver_must: list[str] = field(default_factory=list)      # 네이버 상품명에 꼭 있어야 할 단어
+    naver_exclude: list[str] = field(default_factory=list)   # 네이버 상품명에 있으면 뺄 단어
+    market_note: str = ""        # 네이버 시세 요약 (--market)
 
 
 @dataclass
@@ -77,6 +81,10 @@ def _num(v: str | None, default: float = 0.0) -> float:
         return default
 
 
+def _split(v: str | None) -> list[str]:
+    return [x.strip() for x in (v or "").split("|") if x.strip()]
+
+
 def parse_size(v: str | None) -> tuple[float, float, float] | None:
     parts = [p for p in SIZE_SEP.split((v or "").strip()) if p]
     if len(parts) != 3:
@@ -107,6 +115,8 @@ def load_items(path: Path, markets: dict) -> list[Item]:
             cert_cost_krw=int(_num(r.get("cert_cost_krw"))),
             market_prices={k: int(_num(r.get(f"price_{k}"))) for k in markets},
             url=(r.get("url") or "").strip(), memo=(r.get("memo") or "").strip(),
+            naver_query=(r.get("naver_query") or "").strip(),
+            naver_must=_split(r.get("naver_must")), naver_exclude=_split(r.get("naver_exclude")),
         ))
     return out
 
@@ -233,7 +243,7 @@ def fmt_line(cfg: dict, ln: Line, method: str, sale: dict | None = None) -> list
     it = ln.item
     head = f"■ {it.name}  ({category_label(cfg, it.category)}) × {it.qty}개"
     if ln.blocked:
-        return [head, f"  ⛔ {ln.blocked}"]
+        return [head, f"  ⛔ {ln.blocked}"] + ([f"  📊 {it.market_note}"] if it.market_note else [])
     q = it.qty
     per_sale = int((sale or {}).get("packaging_krw", 0) + (sale or {}).get("outbound_shipping_krw", 0))
     out = [head,
@@ -250,6 +260,8 @@ def fmt_line(cfg: dict, ln: Line, method: str, sale: dict | None = None) -> list
             s += (f" | 시장가 {mq.market_price:,}원 → 마진 {mq.margin_at_market:,}원 "
                   f"{'✓' if mq.ok_at_market else '✗'}")
         out.append(s)
+    if it.market_note:
+        out.append(f"  📊 {it.market_note}")
     out += [f"  🔔 {a}" for a in ln.alerts]
     return out
 
@@ -260,7 +272,7 @@ def write_csv(lines: list[Line], markets: list[str], path: Path) -> None:
               "상품(원)", "대행수수료(원)", "국제배송(원)", "관세(원)", "수입부가세(원)", "통관·입고(원)"]
     for m in markets:
         header += [f"{m}_권장가", f"{m}_개당마진", f"{m}_시장가", f"{m}_시장가마진"]
-    header += ["URL", "알림"]
+    header += ["네이버 시세", "URL", "알림"]
     with path.open("w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(header)
@@ -275,5 +287,5 @@ def write_csv(lines: list[Line], markets: list[str], path: Path) -> None:
                 q = qs.get(m)
                 row += ([q.recommended_price, q.margin, q.market_price or "",
                          q.margin_at_market if q.market_price else ""] if q else [""] * 4)
-            row += [it.url, " / ".join(([ln.blocked] if ln.blocked else []) + ln.alerts)]
+            row += [it.market_note, it.url, " / ".join(([ln.blocked] if ln.blocked else []) + ln.alerts)]
             w.writerow(row)
