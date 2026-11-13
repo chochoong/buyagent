@@ -10,6 +10,7 @@ class Query:
     keyword: str
     jan: str = ""
     newest: bool = False      # True면 최신순(신상 발견용), False면 가격순
+    spec_id: str = ""         # 감시 대상 ID (수동 가격 소스가 사용)
 
 
 @dataclass
@@ -29,6 +30,7 @@ class Offer:
     jan: str = ""
     text: str = ""            # 설명문 등 (JAN 확인용)
     used: bool = False
+    notes: list[str] = field(default_factory=list)   # 소스가 붙이는 경고 (예: 가격 확인한 지 오래됨)
 
     @property
     def total(self) -> float:

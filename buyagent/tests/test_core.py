@@ -323,6 +323,119 @@ class TestRunFailures(TmpDirTest):
         self.assertIn("invalid key", problem)
 
 
+# ---------------------------------------------------------------- 중국: 키보드 구매대행 (수동 가격)
+class TestKeyboardManual(TmpDirTest):
+    def test_keyboard_ignores_electronics_block(self):
+        self.assertIsNone(blocked_category(CFG, "Bluetooth ワイヤレス キーボード", "keyboard"))
+        self.assertEqual(blocked_category(CFG, "Bluetooth ワイヤレス キーボード"), "electronics",
+                         "다른 카테고리에서는 그대로 차단")
+
+    def _src(self, rows: str):
+        f = self.tmp / "manual.csv"
+        f.write_text("id,price,currency,origin,shipping,in_stock,shop,url,checked\n" + rows, encoding="utf-8")
+        return REGISTRY["manual"]({"enabled": True, "file": str(f), "stale_days": 7}, CFG)
+
+    def test_manual_source(self):
+        from datetime import date, timedelta
+        today = date.today().isoformat()
+        old = (date.today() - timedelta(days=30)).isoformat()
+        src = self._src(f"kb,299,CNY,CN,0,Y,A,,{today}\nkb,280,CNY,CN,10,N,B,,{old}\nother,1,CNY,CN,0,Y,C,,{today}\n")
+        offers = src.search(Query("무선 키보드", spec_id="kb"))
+        self.assertEqual([o.shop for o in offers], ["A", "B"], "id가 같은 줄만")
+        self.assertTrue(offers[0].in_stock and not offers[1].in_stock)
+        self.assertEqual(offers[0].notes, [])
+        self.assertIn("30일 전", offers[1].notes[0], "오래된 가격은 재확인 알림")
+        self.assertEqual(src.search(Query("x", spec_id="none")), [])
+
+    def test_keyboard_cost_and_alerts(self):
+        c = cfg()
+        c["fx"]["auto"] = False
+        run = M.Runner(c, False, 0)
+        run.store = Store(self.tmp / "t.db")
+        run.sources = {"manual": self._src(f"kb,299,CNY,CN,0,Y,A,,{__import__('datetime').date.today()}\n")}
+        spec = Spec(id="kb", name="75% 무선 키보드", category="keyboard", keyword="75% 무선 키보드",
+                    sources=["manual"])
+        r = run.run_product(spec)
+        # 299위안 × 195 × 1.015 + 배대지 medium 9,000 + 포장 1,000
+        self.assertEqual(r.cost_krw, round(299 * 195 * 1.015 + 9000 + 1000))
+        self.assertTrue(any("전파법" in a for a in r.alerts), "무선 → 전파법 경고")
+        self.assertIn("1대", r.notice)
+
+
+# ---------------------------------------------------------------- 중국: 사입 계산
+from core.sourcing import Item, calculate, parse_size   # noqa: E402
+
+SC = {
+    "purchase": {"agent_fee_rate": 0.05, "card_fx_fee_rate": 0.015},
+    "freight": {"method": "sea", "sea": {"krw_per_kg": 2500, "krw_per_cbm": 150000, "min_krw": 30000},
+                "air": {"krw_per_kg": 7000, "volumetric_divisor": 6000, "min_krw": 15000}},
+    "customs": {"vat_rate": 0.10, "broker_fee_krw": 33000, "other_fees_krw": 0},
+    "sale": {"inbound_krw": 10000, "packaging_krw": 500, "outbound_shipping_krw": 3000},
+    "tax": {"type": "general"},
+}
+
+
+class TestSourcing(unittest.TestCase):
+    def setUp(self):
+        self.c = cfg()
+        self.c["fx"]["auto"] = False
+        from core.fx import FX
+        self.fx = FX(self.c, True)
+
+    def keycap(self, **kw):
+        base = dict(id="k", name="키캡", category="keycap", unit_price=38, qty=50, cn_shipping=20,
+                    weight_kg=0.6, size_cm=(33, 13, 5))
+        return Item(**{**base, **kw})
+
+    def test_parse_size(self):
+        self.assertEqual(parse_size("33x13x5"), (33, 13, 5))
+        self.assertEqual(parse_size("33 × 13 × 5"), (33, 13, 5))
+        self.assertIsNone(parse_size("33x13"))
+
+    def test_keycap_cost_by_hand(self):
+        ln = calculate(self.c, SC, self.fx, [self.keycap()])[0]
+        goods = (38 * 50 + 20) * 195                  # 374,400원
+        self.assertEqual(ln.goods_krw, round(goods * 1.015))
+        self.assertEqual(ln.freight_krw, 75000)       # 30kg × 2,500 (부피 0.107㎥ × 15만보다 큼)
+        self.assertEqual(ln.duty_krw, 0)               # 키캡 관세 0%
+        self.assertEqual(ln.vat_krw, round((goods + 75000) * 0.1))
+        landed = ln.goods_krw + ln.agent_fee_krw + 75000 + 43000   # 일반과세자: 수입 부가세는 환급 → 제외
+        self.assertEqual(ln.unit_cost, round(landed / 50 + 3500))
+        q = ln.quotes[0]
+        self.assertGreaterEqual(q.margin, 5000, "권장가에서 최소 마진 이상")
+
+    def test_batch_shares_fixed_costs(self):
+        a = self.keycap(id="a", batch="A")
+        b = self.keycap(id="b", batch="A", qty=10)
+        lines = calculate(self.c, SC, self.fx, [a, b])
+        self.assertAlmostEqual(sum(x.fixed_krw for x in lines), 43000, delta=2, msg="통관비는 묶음당 1번")
+        single = calculate(self.c, SC, self.fx, [self.keycap(id="a")])[0]
+        self.assertLess(lines[0].fixed_krw, single.fixed_krw, "같이 보내면 통관비 부담이 줄어듦")
+
+    def test_min_freight(self):
+        ln = calculate(self.c, SC, self.fx, [self.keycap(qty=1)])[0]
+        self.assertEqual(ln.freight_krw, 30000, "해운 최소요금")
+
+    def test_keyboard_blocked_unless_certified(self):
+        kb = Item(id="kb", name="무선 키보드", category="keyboard", unit_price=160, qty=20, weight_kg=1.3)
+        self.assertIn("사입 불가", calculate(self.c, SC, self.fx, [kb])[0].blocked)
+        kb.cert_cost_krw = 2_000_000
+        ln = calculate(self.c, SC, self.fx, [kb])[0]
+        self.assertEqual(ln.blocked, "")
+        self.assertTrue(any("인증비" in a for a in ln.alerts))
+
+    def test_tax_types(self):
+        gen = calculate(self.c, SC, self.fx, [self.keycap()])[0]
+        simple = calculate(self.c, {**SC, "tax": {"type": "simple", "simple_vat_rate_of_sales": 0.015}},
+                           self.fx, [self.keycap()])[0]
+        self.assertGreater(simple.unit_cost, gen.unit_cost, "간이과세자는 수입 부가세가 원가에 포함")
+
+    def test_market_price_check(self):
+        ln = calculate(self.c, SC, self.fx, [self.keycap(market_prices={"coupang": 15000})])[0]
+        self.assertFalse(ln.quotes[0].ok_at_market)
+        self.assertTrue(any("시장가" in a for a in ln.alerts))
+
+
 # ---------------------------------------------------------------- 설정 점검
 class TestValidate(unittest.TestCase):
     def _issues(self, c, specs=None):

@@ -28,12 +28,15 @@ def _strip_except(n: str, words: list[str]) -> str:
     return n
 
 
-def blocked_category(cfg: dict, text: str) -> str | None:
+def blocked_category(cfg: dict, text: str, category: str = "") -> str | None:
     """텍스트가 '허용 안 된 카테고리'의 차단 키워드에 걸리면 그 카테고리 반환
-    규칙의 except 목록에 있는 단어는 먼저 지우고 검사함 (오탐 방지)"""
+    규칙의 except 목록에 있는 단어는 먼저 지우고 검사함 (오탐 방지)
+    category 를 주면 그 카테고리의 ignore_blocks 에 있는 규칙은 건너뜀
+    (예: 키보드는 'Bluetooth'가 들어가도 전자제품 차단에 안 걸리게)"""
     n = norm(text)
+    ignore = set(cfg["categories"].get(category, {}).get("ignore_blocks", []))
     for rule in cfg["block_rules"]:
-        if is_allowed(cfg, rule["category"]):
+        if is_allowed(cfg, rule["category"]) or rule["category"] in ignore:
             continue
         t = _strip_except(n, rule.get("except", []))
         if any(norm(k) in t for k in rule["keywords"]):
@@ -53,7 +56,7 @@ def check_spec(cfg: dict, spec: Spec) -> str:
         return f"카테고리 '{spec.category}' 가 categories.toml에 없음"
     if not cat.get("allowed", False):
         return f"등록 금지 카테고리({cat['name']}): {cat.get('reason', '')}"
-    bc = blocked_category(cfg, f"{spec.keyword} {spec.name}")
+    bc = blocked_category(cfg, f"{spec.keyword} {spec.name}", spec.category)
     if bc:
         return f"검색어/상품명이 차단 규칙({category_label(cfg, bc)})에 걸림"
     return ""
@@ -68,7 +71,7 @@ def filter_offers(cfg: dict, offers: list[Offer], spec: Spec,
     for o in offers:
         n = norm(o.name)
         reason = ""
-        bc = blocked_category(cfg, o.name)
+        bc = blocked_category(cfg, o.name, spec.category)
         if o.used:
             reason = "중고"
         elif bc:

@@ -51,12 +51,13 @@ def load_glossary(base: Path) -> dict[str, list[str]]:
 
 def expand_words(words: list[str], glossary: dict[str, list[str]],
                  used: dict[str, list[str]], unknown: set[str]) -> list[str]:
-    """한글 단어를 단어장의 일본어 표현으로 바꿈. 단어장에 없는 한글은 그대로 두고 unknown에 기록"""
+    """한글 단어에 단어장의 일본어 표현을 더함 (한글 원래 단어도 남김 → 직접 입력한 한글 상품명에도 걸림).
+    단어장에 없는 한글은 그대로 두고 unknown에 기록"""
     out: list[str] = []
     for w in words:
         k = _gkey(w)
         if k in glossary:
-            out += glossary[k]
+            out += glossary[k] + [w]
             used[w] = glossary[k]
         else:
             if HANGUL.search(w):

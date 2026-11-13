@@ -30,6 +30,11 @@ default_shipping = 800
 min_interval = 1.0           # 호출 간격(초)
 retries = 2
 
+[sources.manual]             # API 없는 쇼핑몰(타오바오·알리 등) 가격 직접 입력 → catalog/manual_prices.csv
+enabled = true
+file = "catalog/manual_prices.csv"
+stale_days = 7               # 이 일수보다 오래 확인 안 한 가격은 '재확인' 알림
+
 # ------------------------------------------------------------
 #  원산지(발송 국가)별 설정 - 새 국가를 붙일 때 여기에 추가
 # ------------------------------------------------------------
@@ -40,6 +45,10 @@ duty_free_usd = 150          # 목록통관 면세 기준 (물품가격)
 [origins.US]
 name = "미국"
 duty_free_usd = 200
+
+[origins.CN]
+name = "중국"
+duty_free_usd = 150
 
 # 배대지 요금표 (원, 1회 배송 기준). 카테고리/상품이 small·medium·large 중 하나를 고름
 [shipping_profiles.JP]
@@ -52,12 +61,18 @@ small = 18000
 medium = 28000
 large = 45000
 
+[shipping_profiles.CN]         # 중국 배대지(웨이하이·칭다오 등) 1건 요금 → 실제 이용할 배대지 요금표로 바꾸세요
+small = 6000                 # 키캡·소품 (~1kg)
+medium = 9000                # 키보드 텐키리스 (~2kg)
+large = 14000                # 풀배열 키보드·데스크매트 (~3kg 이상)
+
 # ------------------------------------------------------------
 [fx]
 auto = true                  # frankfurter(ECB) 자동 조회
 [fx.manual_krw]              # 자동 조회 실패 시 사용 (통화 1단위당 원화). 새 통화는 여기 추가
 JPY = 9.4
 USD = 1400.0
+CNY = 195.0
 
 [costs]
 card_fx_fee_rate = 0.015

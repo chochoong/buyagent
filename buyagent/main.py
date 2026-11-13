@@ -68,7 +68,7 @@ class Runner:
                 errors.append(f"소스 '{n}' 비활성/키 없음")
                 continue
             try:
-                offers += src.search(Query(spec.keyword, spec.jan, newest))
+                offers += src.search(Query(spec.keyword, spec.jan, newest, spec.id))
             except Exception as e:
                 errors.append(f"{n}: {e}")
         return offers, errors
@@ -79,7 +79,7 @@ class Runner:
             price_offer(self.cfg, self.fx, r, offer, self.bundle)
         except KeyError as e:
             r.offer, r.alerts = offer, [f"계산 불가: {e}"]
-        r.alerts += warnings_for(self.cfg, offer.name)
+        r.alerts += warnings_for(self.cfg, offer.name) + offer.notes
         return r
 
     def cheapest(self, spec: Spec, offers: list[Offer]) -> Result:

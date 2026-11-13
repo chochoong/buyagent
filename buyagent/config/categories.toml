@@ -7,6 +7,8 @@
 #   min_margin_*     : 이 카테고리 전용 마진 기준
 #   notice           : 상세페이지 고지문
 #   check_shop       : true면 '정품 판매처 확인' 알림 (기본 true)
+#   ignore_blocks    : 이 카테고리에서는 무시할 차단 규칙 (예: 키보드는 electronics 차단 무시)
+#   bulk_ok          : 사입(sourcing.py) 가능 여부. false면 사입 계산에서 ⛔ 표시 (bulk_reason 에 사유)
 #
 #  새 품목을 다루려면 [categories.<키>] 를 하나 추가하면 됩니다.
 # ============================================================
@@ -73,6 +75,55 @@ shipping_profile = "large"
 min_margin_krw = 8000
 min_margin_rate = 0.15
 notice = "본 상품은 해외구매대행 상품입니다."
+
+# ---------------- 컴퓨터 주변기기 ----------------
+# 관세율: 키보드·키캡 등 컴퓨터 부품은 ITA(정보기술협정) 품목이라 0%로 알려져 있음.
+#         스위치·손목받침·데스크매트는 HS코드에 따라 다름 → 관세사 확인 후 수정
+[categories.keyboard]
+name = "키보드 본체"
+allowed = true                 # 구매대행(구매자 1인 개인 사용)은 가능
+duty_rate = 0.0
+shipping_profile = "medium"
+min_margin_krw = 15000
+min_margin_rate = 0.12
+check_shop = false
+ignore_blocks = ["electronics"]   # 'Bluetooth'·'ワイヤレス' 등이 들어가도 전자제품 차단 안 함
+bulk_ok = false
+bulk_reason = "전자파 적합성평가(KC) 대상 → 사입하려면 모델별 인증 필요 (유선: 적합등록, 무선: 적합인증)"
+notice = "본 상품은 해외구매대행 상품으로 구매자 본인 사용 목적 1대에 한해 전파법 적합성평가가 면제됩니다. 국내 A/S가 제공되지 않으며, 재판매가 금지됩니다."
+
+[categories.keycap]
+name = "키캡"
+allowed = true
+duty_rate = 0.0
+shipping_profile = "small"
+min_margin_krw = 5000
+min_margin_rate = 0.15
+check_shop = false
+bulk_ok = true
+notice = ""
+
+[categories.key_switch]
+name = "키보드 스위치·부품(전자회로 없는 것)"
+allowed = true
+duty_rate = 0.08
+shipping_profile = "small"
+min_margin_krw = 5000
+min_margin_rate = 0.15
+check_shop = false
+bulk_ok = true
+notice = ""
+
+[categories.desk_acc]
+name = "손목받침·데스크매트"
+allowed = true
+duty_rate = 0.08
+shipping_profile = "large"
+min_margin_krw = 5000
+min_margin_rate = 0.15
+check_shop = false
+bulk_ok = true
+notice = ""
 
 # ---------------- 등록 금지 (규제 품목) ----------------
 [categories.plush]
@@ -175,8 +226,16 @@ keywords = ["中古", "ジャンク", "バラ売り", "海外版", "ノーブラ
 #  경고 키워드: 차단은 안 하고 알림만 (확인 필요 사항)
 # ============================================================
 [[warn_rules]]
-keywords = ["電池", "battery", "バッテリー"]
+keywords = ["電池", "battery", "バッテリー", "电池", "锂", "充电"]
 message = "배터리 포함 → 항공 운송 가능 여부를 배대지에 확인"
+
+[[warn_rules]]
+keywords = ["无线", "蓝牙", "2.4G", "Bluetooth", "ワイヤレス", "wireless", "무선", "블루투스"]
+message = "무선 제품 → 전파법 적합인증 대상. 구매대행은 구매자 1인 1대(개인 사용)만 가능, 사입 불가"
+
+[[warn_rules]]
+keywords = ["RGB", "LED", "灯", "发光"]
+message = "LED·전자부품 포함 의심 → 전자회로가 있으면 KC 대상인지 확인"
 
 [[warn_rules]]
 keywords = ["タンブラー", "tumbler", "食器", "マグカップ", "水筒", "弁当箱"]

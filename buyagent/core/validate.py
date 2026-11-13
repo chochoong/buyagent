@@ -144,7 +144,7 @@ def validate(cfg: dict, specs: list[Spec], registry: dict, base: Path) -> list[t
                         f"[shipping_profiles.{origin}] 에 없음")
         if s.bundle_size < 0:
             err(f"{label}: bundle_size 가 음수")
-        if (not s.discover and not s.must_include and not s.jan
+        if (not s.discover and not s.must_include and not s.jan and s.sources != ["manual"]
                 and cats.get(s.category, {}).get("allowed")):
             warn(f"{label}: must_include 와 jan 이 모두 비어 있음 → 엉뚱한 상품이 최저가로 잡힐 수 있음")
 

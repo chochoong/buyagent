@@ -8,12 +8,15 @@
 
 ```
 buyagent/
-├── main.py                 실행 파일
+├── main.py                 실행 파일 (구매대행 감시)
+├── sourcing.py             사입 원가 계산기 (중국 1688 등)
 ├── run.bat                 1회 실행 + run.log 기록 (작업 스케줄러용)
 ├── schedule.bat            작업 스케줄러에 매시간 실행 등록
 ├── catalog/
 │   ├── products.csv        ★ 감시할 상품 목록 (엑셀로 편집)
-│   └── discover.csv        ★ 신상품 발견용 검색어
+│   ├── discover.csv        ★ 신상품 발견용 검색어
+│   ├── manual_prices.csv   ★ API 없는 쇼핑몰(타오바오·알리) 가격 직접 입력
+│   └── sourcing.csv        ★ 사입 계산할 상품 (1688 단가·수량·무게)
 ├── config/
 │   ├── settings.toml       환율, 배대지 요금표, 국가별 면세 한도, 마켓 수수료
 │   ├── settings.local.toml API 키·웹훅 (git 제외, .example 복사해서 만듦)
@@ -22,6 +25,7 @@ buyagent/
 ├── sources/                쇼핑몰 플러그인 (파일 하나 = 쇼핑몰 하나)
 │   ├── rakuten.py          라쿠텐 (일본)
 │   ├── yahoo.py            Yahoo! 쇼핑 (일본)
+│   ├── manual.py           수동 가격 (catalog/manual_prices.csv)
 │   ├── demo.py             예시 데이터 (--demo)
 │   └── _template.py        새 쇼핑몰 만들 때 복사할 템플릿
 ├── tests/                  회귀 테스트 (python -m unittest)
@@ -69,6 +73,42 @@ API 키와 웹훅 주소는 `config/settings.local.toml`에 넣어요. 이 파�
 - **⚠ 주의:** API 키 미입력, JAN 형식 이상, 상품명 조건(must_include·jan)이 없는 상품, 단어장에 없는 한글 등
 
 오류가 있으면 종료 코드 1로 끝나요. 평소 실행할 때도 오류가 있으면 맨 위에 경고가 떠요.
+
+## 중국 소싱
+
+### 사입 계산기 (`python sourcing.py`)
+
+1688 등에서 여러 개를 한 번에 들여와 재고로 파는 경우의 원가를 계산해요. `catalog/sourcing.csv`에 한 줄씩 넣어요.
+
+| 열 | 내용 |
+|---|---|
+| `unit_price`, `currency` | 1688 단가 (기본 CNY) |
+| `qty` | 수량 |
+| `cn_shipping` | 판매자 → 중국 배대지 배송비 (이 줄 전체) |
+| `weight_kg`, `size_cm` | **개당** 포장 무게, 포장 크기 (`33x13x5`) |
+| `batch` | 같은 값끼리 한 번에 발송 → 최소 배송비·통관 수수료를 나눠 냄 |
+| `cert_cost_krw` | KC 인증 비용 (인증 받은 키보드 등). 수량으로 나눠 원가에 포함 |
+| `price_<마켓>` | 쿠팡·스마트스토어 경쟁 판매가 → 그 가격에 팔 때 마진 확인 |
+
+```bash
+python sourcing.py              # 해운 기준
+python sourcing.py --air        # 항공 기준
+python sourcing.py --offline    # 환율 자동 조회 없이
+```
+
+- **계산 기준:** 구매대행 수수료, 국제 배송비(무게·부피 중 큰 쪽), 관세, 통관 수수료, 포장·택배비를 넣어서 **개당 원가, 마켓별 권장가와 마진, 총 투입금**을 계산해요.
+- **요금 설정:** `config/sourcing.toml`에 있어요. **예시값이니 실제 견적으로 바꿔 주세요.**
+- **부가세:** 일반과세자는 수입 부가세를 환급받아서 원가에서 빠지고, 판매가의 1/11은 납부하는 것으로 계산해요. 간이과세자는 `[tax] type = "simple"`으로 바꿔요.
+- **사입 금지:** `categories.toml`에서 `bulk_ok = false`인 카테고리(키보드 본체 등 KC 대상)는 ⛔로 표시돼요.
+
+### API 없는 쇼핑몰 가격 직접 입력 (키보드 구매대행 등)
+
+타오바오·알리처럼 API가 없는 곳은 `catalog/manual_prices.csv`에 가격을 직접 적어요.
+
+1. `products.csv`에 상품을 추가하고, `sources` 열에 `manual`을 써요.
+2. `manual_prices.csv`에 같은 `id`로 가격, 통화(CNY), 판매처, 확인 날짜(`checked`)를 적어요.
+
+그러면 원가·권장가 계산, 가격이 바뀔 때 알림, 품절(`in_stock = N`) 알림이 다른 쇼핑몰과 똑같이 돼요. `checked` 날짜가 7일 넘게 지나면 "가격 다시 확인" 알림이 와요.
 
 ## 확장 방법
 
