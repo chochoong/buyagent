@@ -460,11 +460,21 @@ class TestNaver(unittest.TestCase):
 
     def test_trend(self):
         from core.naver import sparkline, trend_change
+        from datetime import date, timedelta
+        d = date.today().replace(day=1)
+        months = []
+        for _ in range(12):                                      # 지난달부터 거꾸로 12개월
+            d = (d - timedelta(days=1)).replace(day=1)
+            months.insert(0, d.isoformat())
         vals = [10] * 9 + [20] * 3
         self.s.post_responses = [{"results": [
-            {"title": "키캡", "data": [{"period": f"2026-{m:02d}-01", "ratio": v} for m, v in enumerate(vals, 1)]}]}]
-        t = self.nv.trend(["키캡"])
+            {"title": "키캡", "data": [{"period": p, "ratio": v} for p, v in zip(months, vals)]},
+            # 검색량이 적은 달은 응답에서 빠짐 → 0으로 채워 12개월을 유지
+            {"title": "손목받침", "data": [{"period": p, "ratio": 5} for p in months if p not in months[3:6]]}]}]
+        t = self.nv.trend(["키캡", "손목받침"])
         self.assertEqual([v for _, v in t["키캡"]], vals)
+        self.assertEqual([p for p, _ in t["키캡"]], months)
+        self.assertEqual([v for _, v in t["손목받침"]], [5] * 3 + [0] * 3 + [5] * 6)
         self.assertAlmostEqual(trend_change(vals), 1.0)          # 3개월 평균 10 → 20
         body = self.s.posts[0]
         self.assertEqual(body["timeUnit"], "month")

@@ -37,13 +37,20 @@ class Naver:
         y, mth = end.year, end.month - months + 1
         while mth <= 0:
             y, mth = y - 1, mth + 12
+        periods = []                                             # 검색량이 거의 없는 달은 응답에서 빠지므로 0으로 채움
+        py, pm = y, mth
+        for _ in range(months):
+            periods.append(f"{py}-{pm:02d}-01")
+            py, pm = (py + 1, 1) if pm == 12 else (py, pm + 1)
         out: dict[str, list[tuple[str, float]]] = {}
         for i in range(0, len(keywords), 5):
-            body = {"startDate": f"{y}-{mth:02d}-01", "endDate": end.isoformat(), "timeUnit": "month",
+            body = {"startDate": periods[0], "endDate": end.isoformat(), "timeUnit": "month",
                     "keywordGroups": [{"groupName": k, "keywords": [k]} for k in keywords[i:i + 5]]}
             d = post_json(f"{self.base}/search-trend/v1/search", body, self._headers())
             for r in d.get("results", []):
-                out[r["title"]] = [(x.get("period", ""), float(x.get("ratio", 0))) for x in r.get("data", [])]
+                got = {x.get("period", "")[:7]: float(x.get("ratio", 0)) for x in r.get("data", [])}
+                if got:
+                    out[r["title"]] = [(p, got.get(p[:7], 0.0)) for p in periods]
         return out
 
 

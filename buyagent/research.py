@@ -77,7 +77,7 @@ def main() -> None:
         arrow = "" if ch is None else ("▲" if ch > 0.05 else "▼" if ch < -0.05 else "→")
         print(f"■ {kw}")
         print(f"  {sparkline(vals)}  ({series[0][0][:7]} ~ {series[-1][0][:7]})")
-        print(f"  평균 {avg:.0f} · 최고 {peak}"
+        print(f"  평균 {avg:.1f}{' (거의 검색 안 됨)' if avg < 1 else ''} · 최고 {peak}"
               + ("" if ch is None else f" · 최근 3개월 {arrow} {ch:+.0%}") + "\n")
         rows.append([kw, f"{avg:.1f}", peak, "" if ch is None else f"{ch:+.0%}", (i // 5) + 1,
                      " ".join(f"{v:.0f}" for v in vals)])
