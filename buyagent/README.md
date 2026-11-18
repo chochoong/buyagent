@@ -49,11 +49,32 @@ python main.py --bundle 5        # 5개를 한 번에 배송받는 기준으로 
 python main.py --only chiikawa   # ID에 'chiikawa'가 들어간 것만 실행
 python main.py --probe           # API 키 확인: 쇼핑몰마다 검색 1번 (--probe "검색어")
 python main.py --test-alert      # 웹훅으로 테스트 메시지 보내기
+python main.py --search "セイコー SBTQ041" --category watch   # 직접 검색: 등록 없이 최저가·원가·권장가 (→ reports/search.json, 대시보드 '직접 검색')
 python main.py --no-alert        # 시험 실행: 웹훅 알림만 안 보냄 (조회·history.db·리포트·latest.json 은 평소대로)
 python -m unittest               # 코드 고친 뒤 기존 기능이 그대로인지 확인
 ```
 
 Python 3.11 이상이 필요하고, 다른 패키지는 설치하지 않아도 됩니다.
+
+### 자체 화면 (`web.py`)
+
+```bash
+python web.py        # 또는 web.bat 더블클릭 → http://127.0.0.1:8766 (내 PC에서만 열림)
+```
+
+trade_hub 없이도 buyagent 혼자 쓰는 작업 화면이에요. 계산은 모두 `main.py`가 하고, 화면은 실행하고 결과 파일을 보여 줄 뿐이에요.
+
+- **직접 검색:** 검색어 + 카테고리 → 최저가·원가·권장가 (원가 낮은 순). 감시·알림에는 영향 없음
+- **이 검색을 감시에 추가:** 방금 검색한 조건(검색어·필수 단어·제외 단어)을 `products.csv`에 한 줄 추가 → 다음 감시부터 매시간 추적
+- **감시 켜기/끄기**, **감시 시험 실행**(`--no-alert`: 웹훅만 안 보냄)
+- 최근 감시 결과, 감시 상품, 수동 가격 보기
+
+상품이 들어오는 길은 두 가지예요. 둘 다 같은 `products.csv`에 쌓이고 같은 방식으로 감시돼요.
+
+1. **파이프라인:** 시장조사·아이템 발굴(1번) → 공급처 발굴(2번) → `export-buyagent` → buyagent 감시 (메모에 "2번 공급처 발굴에서 가져옴")
+2. **직접 검색:** 이미 정한 상품(예: 세이코 SBTQ041)은 1·2번을 건너뛰고 화면에서 검색 → 감시에 추가 (메모에 "직접 검색에서 추가")
+
+trade_hub 대시보드는 같은 결과 파일(`reports/latest.json`, `reports/search.json`)을 읽기만 해서, 두 화면을 같이 켜 둬도 돼요.
 
 ### API 키 넣기
 

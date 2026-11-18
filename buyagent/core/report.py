@@ -84,10 +84,10 @@ def result_json(kind: str, r: Result) -> dict:
     """latest.json 의 items 한 줄 (trade_hub 대시보드가 읽음 → 키 이름 바꾸지 말 것)"""
     o = r.offer
     return {
-        "kind": "감시" if kind == "고정" else kind,      # 감시 / 신상
+        "kind": "감시" if kind == "고정" else kind,      # 감시 / 신상 / 검색
         "id": r.spec.id,
         "hub_product_id": r.spec.hub_product_id,
-        "name": o.name if (kind == "신상" and o) else r.spec.name,
+        "name": o.name if (kind in ("신상", "검색") and o) else r.spec.name,
         "category": r.spec.category,
         "status": item_status(r),
         "blocked_reason": r.blocked_reason or None,
@@ -109,16 +109,38 @@ def result_json(kind: str, r: Result) -> dict:
 def write_latest(path: Path, error: str | None, demo: bool, markets: list[str],
                  rows: list[tuple[str, Result]]) -> None:
     """실행 결과를 JSON 으로 덮어씀. 임시 파일에 쓴 뒤 이름 바꾸기 → 읽는 쪽이 반쯤 쓰인 파일을 보지 않음"""
-    data = {
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    write_json(path, {
+        "schema": 1,                # 형식이 바뀌면 올림 (trade_hub 대시보드 호환 확인용)
         "ok": not error,
         "error": error or None,
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "run_at": now,              # trade_hub 대시보드가 읽는 실행 시각
+        "generated_at": now,        # (같은 값, 예전 이름)
         "demo": demo,
         "markets": markets,
         "items": [result_json(k, r) for k, r in rows],
-    }
+    })
+
+
+def write_search(path: Path, error: str | None, query: dict, markets: list[str],
+                 results: list[Result], excluded: dict[str, int], total: int) -> None:
+    """직접 검색(--search) 결과. 감시 결과(latest.json)와 섞이지 않게 따로 저장"""
+    write_json(path, {
+        "ok": not error,
+        "error": error or None,
+        "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "query": query,
+        "markets": markets,
+        "found": total,                     # 쇼핑몰이 돌려준 전체 건수
+        "excluded": excluded,               # 걸러낸 사유별 건수
+        "items": [result_json("검색", r) for r in results],   # 개당 원가 낮은 순
+    })
+
+
+def write_json(path: Path, data: dict) -> None:
+    """임시 파일에 쓴 뒤 이름 바꾸기 → 읽는 쪽이 반쯤 쓰인 파일을 보지 않음"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".latest_", suffix=".tmp", dir=path.parent)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.stem}_", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)

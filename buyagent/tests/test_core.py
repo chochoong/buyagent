@@ -781,6 +781,88 @@ class TestLatestJson(TmpDirTest):
         self.assertIn("사용 가능한 소스가 없습니다", d["error"])
         self.assertFalse((self.tmp / "health.json").exists(), "--no-alert 는 health.json 을 바꾸지 않음")
 
+    def test_run_at(self):
+        self._main("--demo")
+        self.assertRegex(self._latest()["run_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")   # 대시보드가 읽는 키
+
+    def test_search(self):
+        self.assertEqual(self._main("--demo", "--search", "セイコー SBTQ041", "--category", "watch"), 0)
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["query"]["must_include"], ["SBTQ041"])            # 검색어 속 모델명
+        self.assertIn("ベルト", d["query"]["exclude"])                        # 카테고리 search_exclude
+        self.assertTrue(d["items"])
+        costs = [i["cost_krw"] for i in d["items"]]
+        self.assertEqual(costs, sorted(costs))                               # 원가 낮은 순
+        self.assertTrue(all(i["kind"] == "검색" and "SBTQ041" in i["name"] for i in d["items"]))
+        self.assertFalse((self.tmp / "reports" / "latest.json").exists(), "감시 결과는 건드리지 않음")
+        self.assertFalse((self.tmp / "health.json").exists())
+
+    def _search_ko(self, call, query="세이코  SBTQ041"):
+        saved = M.TRANSLATE_CALL
+        M.TRANSLATE_CALL = call
+        out = io.StringIO()
+        try:
+            sys.argv = ["main.py", "--demo", "--search", query, "--category", "watch"]
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    M.main()
+        finally:
+            M.TRANSLATE_CALL = saved
+        return cm.exception.code, out.getvalue()
+
+    def test_search_korean_is_translated(self):
+        calls = []
+        code, out = self._search_ko(lambda q, base: calls.append(q) or "「セイコー SBTQ041」")
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["세이코 SBTQ041"])                          # 공백 정리 후 1번 호출
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertEqual(d["query"]["keyword"], "セイコー SBTQ041")           # 따옴표·「」 제거
+        self.assertEqual(d["query"]["keyword_original"], "세이코 SBTQ041")
+        self.assertEqual(d["query"]["must_include"], ["SBTQ041"])
+        self.assertTrue(d["items"])
+        self.assertIn("번역: 세이코 SBTQ041 → セイコー SBTQ041", out)
+        # 같은 검색어 → 캐시 (번역 함수를 부르지 않음)
+        def boom(q, base):
+            raise AssertionError("캐시를 써야 함")
+        self.assertEqual(self._search_ko(boom, "세이코 SBTQ041")[0], 0)
+        self.assertTrue((self.tmp / "data" / "translate_cache.json").exists())
+
+    def test_search_japanese_has_no_original(self):
+        code, _ = self._search_ko(lambda q, base: self.fail("한글이 없으면 번역 안 함"), "セイコー SBTQ041")
+        self.assertEqual(code, 0)
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertIsNone(d["query"]["keyword_original"])
+
+    def test_search_translate_failure(self):
+        bad = {"한글 남음": lambda q, b: "セイコー 시계", "빈 답": lambda q, b: "  ",
+               "여러 줄": lambda q, b: "セイコー\nSBTQ041", "너무 김": lambda q, b: "ア" * 101,
+               "API 오류": lambda q, b: (_ for _ in ()).throw(ConnectionError("x"))}
+        for why, call in bad.items():
+            code, out = self._search_ko(call)
+            self.assertEqual(code, 2, why)
+            self.assertIn("번역 실패: 일본어로 직접 입력해 주세요", out, why)
+            self.assertFalse((self.tmp / "reports" / "search.json").exists(), f"{why}: search.json 안 씀")
+            self.assertFalse((self.tmp / "data" / "translate_cache.json").exists(), f"{why}: 실패는 캐시 안 함")
+
+    def test_translate_units(self):
+        from core import translate as T
+        none = lambda q, b: self.fail("부르면 안 됨")                       # noqa: E731
+        self.assertEqual(T.to_japanese("セイコー  SBTQ041", self.tmp, call=none), "セイコー SBTQ041")
+        self.assertEqual(T.to_japanese("쿠션 S", self.tmp, {"쿠션": ["クッション"]}, call=none), "クッション S")
+        import os
+        saved = os.environ.pop("ANTHROPIC_API_KEY", None)
+        try:
+            with self.assertRaises(T.TranslateError):                     # 키 없음 (임시 폴더엔 .env 없음)
+                T.to_japanese("새 단어", self.tmp)
+        finally:
+            if saved is not None:
+                os.environ["ANTHROPIC_API_KEY"] = saved
+
+    def test_search_needs_category(self):
+        self.assertEqual(self._main("--search", "x"), 2)
+        self.assertEqual(M.model_words("セイコー SBTQ041 腕時計 7T92"), ["SBTQ041", "7T92"])
+
     def test_crash_writes_error(self):
         def boom(*a, **k):
             raise ValueError("문법 오류")

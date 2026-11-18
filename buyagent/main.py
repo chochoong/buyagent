@@ -10,6 +10,8 @@
   python main.py --probe          # API 키 넣은 뒤 검색 1번으로 확인 (--probe "검색어")
   python main.py --test-alert     # 웹훅 테스트 메시지
   python main.py --no-alert       # 시험 실행: 웹훅 알림만 안 보냄 (조회·기록·리포트는 평소대로)
+  python main.py --search "セイコー SBTQ041" --category watch
+                                  # 직접 검색: products.csv 에 없어도 바로 최저가·원가·권장가 (→ reports/search.json)
 
   실행 결과는 reports/latest.json 에도 남음 (trade_hub 대시보드가 읽음)
   종료 코드: 0 = 정상 (일부 상품 차단·품절 포함), 1 = 실행 실패 (설정 오류·모든 조회 실패 등)
@@ -39,11 +41,12 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from core.config import load_config, load_specs, load_toml  # noqa: E402
+from core import translate                                  # noqa: E402
+from core.config import load_config, load_glossary, load_specs, load_toml  # noqa: E402
 from core.fx import FX                                     # noqa: E402
 from core.models import Offer, Query, Result, Spec         # noqa: E402
 from core.pricing import price_offer                       # noqa: E402
-from core.report import fmt_result, send_webhook, write_csv, write_latest  # noqa: E402
+from core.report import fmt_result, send_webhook, write_csv, write_latest, write_search  # noqa: E402
 from core.rules import category_label, check_spec, filter_offers, warnings_for  # noqa: E402
 from core.storage import Store, alert_key                  # noqa: E402
 from core.validate import ERROR, validate                  # noqa: E402
@@ -109,7 +112,7 @@ class Runner:
         good = [r for r in cands if r.cost_krw > 0]
         return min(good, key=lambda r: r.cost_krw) if good else cands[0]
 
-    def run_product(self, spec: Spec) -> Result:
+    def run_product(self, spec: Spec, track: bool = True) -> Result:
         res = Result(spec=spec)
         if reason := check_spec(self.cfg, spec):
             res.blocked_reason = reason
@@ -130,7 +133,8 @@ class Runner:
         else:
             if skipped:
                 res.alerts.append("검색 못 한 쇼핑몰: " + " / ".join(skipped))
-            self.store.track(res, self.ts, self.cfg["alerts"]["price_change_rate"])
+            if track:
+                self.store.track(res, self.ts, self.cfg["alerts"]["price_change_rate"])
         return res
 
     def run_discover(self, spec: Spec) -> tuple[list[Result], str]:
@@ -295,6 +299,85 @@ def _fallback_webhook() -> str:
     return ""
 
 
+# ---------------------------------------------------------------- 직접 검색
+def model_words(keyword: str) -> list[str]:
+    """검색어에서 모델명(영문+숫자 섞인 단어, 예: SBTQ041)만 골라 상품명 필수 단어로 씀
+    → 시계줄·케이스 같은 다른 상품이 최저가로 뽑히는 것을 줄임"""
+    return [w for w in keyword.split() if any(c.isdigit() for c in w) and any(c.isalpha() for c in w)]
+
+
+TRANSLATE_CALL = None       # 테스트에서 가짜 번역 함수로 바꿈 (None = 실제 Claude 호출)
+
+
+def search(cfg: dict, args) -> int:
+    """products.csv 에 등록하지 않고 한 번 검색. 가격 이력(history.db)·알림·health.json 은 건드리지 않음"""
+    keyword = " ".join(args.search.split())
+    cats = {k: v for k, v in cfg["categories"].items() if not k.startswith("_")}
+    if not keyword:
+        print("검색어를 넣으세요: python main.py --search \"セイコー SBTQ041\" --category watch", file=sys.stderr)
+        return 2
+    if args.category not in cats:
+        print(f"--category 를 정하세요 (관세율·마진 기준·차단 규칙이 카테고리마다 다름). 가능한 값:\n  "
+              + "\n  ".join(f"{k:<16} {v.get('name', '')}{'' if v.get('allowed') else ' (등록 금지)'}"
+                             for k, v in cats.items()), file=sys.stderr)
+        return 2
+    original = keyword if translate.has_korean(keyword) else None
+    if original:                        # 한글 검색어 → 일본어 (실패하면 검색하지 않음, search.json 그대로)
+        try:
+            keyword = translate.to_japanese(keyword, BASE, load_glossary(BASE), call=TRANSLATE_CALL)
+        except translate.TranslateError as err:
+            print(str(err))
+            return 2
+        print(f"번역: {original} → {keyword}")
+    must = [w for w in args.must.split("|") if w.strip()] if args.must else model_words(keyword)
+    excl = ([w for w in args.exclude.split("|") if w.strip()] if args.exclude
+            else list(cats[args.category].get("search_exclude", [])))
+    spec = Spec(id="search", name=keyword, category=args.category, keyword=keyword, must_include=must,
+                exclude=excl)
+    query = {"keyword": keyword, "keyword_original": original, "category": args.category,
+             "must_include": must, "exclude": spec.exclude}
+    markets = list(cfg["markets"])
+    out = BASE / "reports" / "search.json"
+    run = Runner(cfg, args.demo, args.bundle)
+    print(f"\n[직접 검색] {keyword}  (카테고리: {category_label(cfg, args.category)}"
+          + (f", 필수 단어: {'·'.join(must)}" if must else "") + ")")
+    print(f"소스: {', '.join(run.search_sources() or run.sources) or '없음'}")
+
+    if reason := check_spec(cfg, spec):
+        res = Result(spec=spec, blocked_reason=reason)
+        print("\n".join(fmt_result(res)))
+        write_search(out, None, query, markets, [res], {}, 0)
+        return 0
+    offers, errors, skipped = run.fetch(spec, newest=False)
+    excluded: dict[str, int] = {}
+    ok = [o for o in filter_offers(cfg, offers, spec, excluded) if o.in_stock]
+    results = sorted((r for r in (run.priced(spec, o) for o in ok) if r.cost_krw > 0), key=lambda r: r.cost_krw)
+    if len(results) >= 3:       # 중간값보다 훨씬 싸면 부속품·다른 모델일 가능성 → 표시만 (빼지는 않음)
+        mid = results[len(results) // 2].cost_krw
+        for r in results:
+            if r.cost_krw < mid * 0.4:
+                r.alerts.insert(0, f"다른 결과 중간값(원가 {mid:,}원)보다 크게 쌈 → 부속품·다른 모델인지 상품명 확인")
+    results = results[:max(1, args.top)]
+    problem = " / ".join(errors + skipped) if (errors or skipped) and not offers else ""
+    if errors and offers:
+        for r in results:
+            r.alerts.append("일부 쇼핑몰 조회 실패: " + " / ".join(errors))
+    write_search(out, problem, query, markets, results, excluded, len(offers))
+
+    if problem:
+        print(f"  ❌ 조회 실패: {problem}")
+    print(f"  검색 {len(offers)}건 → 조건 통과 {len(ok)}건"
+          + (" | 제외: " + ", ".join(f"{k} {v}" for k, v in excluded.items()) if excluded else ""))
+    for i, r in enumerate(results, 1):
+        print(f"\n  {i}. {r.offer.name[:70]}")
+        print("\n".join(fmt_result(r, "     ")))
+        print(f"     {r.offer.url}")
+    if not results and not problem:
+        print("  조건에 맞는 재고 있는 판매처 없음 → --must 로 필수 단어를 바꾸거나 검색어를 바꿔 보세요")
+    print(f"\n결과 저장: {out}")
+    return 1 if problem else 0
+
+
 # ---------------------------------------------------------------- 실행
 def save_latest(error: str, demo: bool, markets: list[str], rows: list[tuple[str, Result]]) -> None:
     """reports/latest.json 덮어쓰기. 실패해도 감시 실행 자체는 계속"""
@@ -395,6 +478,12 @@ def main() -> None:
                     help="API 키 확인: 소스마다 검색 1번 해서 응답 출력")
     ap.add_argument("--no-alert", action="store_true",
                     help="시험 실행: 웹훅 알림만 보내지 않음 (가격 조회·history.db·리포트·latest.json 은 평소대로, health.json 은 그대로)")
+    ap.add_argument("--search", default=None, metavar="검색어",
+                    help="직접 검색: products.csv 에 없어도 최저가·원가·권장가 확인 (→ reports/search.json)")
+    ap.add_argument("--category", default="", help="--search 의 카테고리 (categories.toml 키, 예: watch)")
+    ap.add_argument("--must", default="", help="--search 상품명 필수 단어, 여러 개는 | 로 (기본: 검색어 속 모델명)")
+    ap.add_argument("--exclude", default="", help="--search 제외 단어, 여러 개는 | 로 (기본: 카테고리의 search_exclude)")
+    ap.add_argument("--top", type=int, default=10, help="--search 결과 몇 개까지 (개당 원가 낮은 순)")
     args = ap.parse_args()
 
     cfg: dict | None = None
@@ -408,12 +497,14 @@ def main() -> None:
             sys.exit(test_alert(cfg))
         if args.probe is not None:
             sys.exit(probe(cfg, specs, args.probe))
+        if args.search is not None:
+            sys.exit(search(cfg, args))
         print(f"===== {datetime.now():%Y-%m-%d %H:%M:%S} 실행 =====")
         problem = run_all(cfg, args, specs, all_specs)
     except Exception as e:              # 프로그램 전체가 죽는 경우 (설정 파일 문법 오류 등)
         traceback.print_exc()
         problem = f"프로그램 오류 {type(e).__name__}: {e}"
-        if not (args.check or args.test_alert or args.probe is not None):
+        if not (args.check or args.test_alert or args.probe is not None or args.search is not None):
             save_latest(problem, args.demo, list((cfg or {}).get("markets", {})), [])
 
     if args.demo or args.no_alert:      # 예시·시험 실행은 실행 상태(health.json)·실패 알림을 건드리지 않음

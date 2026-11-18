@@ -22,3 +22,6 @@ client_secret*.json
 *token*.json
 *.pem
 *.key
+
+# 직접 검색 번역 캐시 등 실행 중 생기는 데이터
+buyagent/data/
