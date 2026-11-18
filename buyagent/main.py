@@ -9,6 +9,10 @@
   python main.py --check          # 설정·카탈로그 점검만
   python main.py --probe          # API 키 넣은 뒤 검색 1번으로 확인 (--probe "검색어")
   python main.py --test-alert     # 웹훅 테스트 메시지
+  python main.py --no-alert       # 시험 실행: 웹훅 알림만 안 보냄 (조회·기록·리포트는 평소대로)
+
+  실행 결과는 reports/latest.json 에도 남음 (trade_hub 대시보드가 읽음)
+  종료 코드: 0 = 정상 (일부 상품 차단·품절 포함), 1 = 실행 실패 (설정 오류·모든 조회 실패 등)
 
 확장 방법
   - 상품 추가        → catalog/products.csv 에 한 줄 추가 (엑셀 편집 가능)
@@ -39,7 +43,7 @@ from core.config import load_config, load_specs, load_toml  # noqa: E402
 from core.fx import FX                                     # noqa: E402
 from core.models import Offer, Query, Result, Spec         # noqa: E402
 from core.pricing import price_offer                       # noqa: E402
-from core.report import fmt_result, send_webhook, write_csv  # noqa: E402
+from core.report import fmt_result, send_webhook, write_csv, write_latest  # noqa: E402
 from core.rules import category_label, check_spec, filter_offers, warnings_for  # noqa: E402
 from core.storage import Store, alert_key                  # noqa: E402
 from core.validate import ERROR, validate                  # noqa: E402
@@ -55,23 +59,39 @@ class Runner:
         self.ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # -- 검색: 지정된 소스(없으면 전체)에서 모아오기 --
-    def fetch(self, spec: Spec, newest: bool) -> tuple[list[Offer], list[str]]:
-        names = list(self.sources) if (self.demo or not spec.sources) else spec.sources
-        offers, errors = [], []
+    def search_sources(self) -> list[str]:
+        """sources 를 비운 상품이 쓰는 소스 (manual 처럼 이름을 적어야 쓰는 소스 제외)"""
+        return [n for n, s in self.sources.items() if not s.explicit_only]
+
+    def fetch(self, spec: Spec, newest: bool) -> tuple[list[Offer], list[str], list[str]]:
+        """(오퍼, 조회 오류, 못 쓴 소스).
+        조회 오류 = 이번에만 실패했을 수 있음(네트워크·키 만료) → 품절·원가 판단 보류
+        못 쓴 소스 = 설정상 꺼져 있음 → 늘 같으니 남은 소스 결과로 판단"""
+        offers: list[Offer] = []
+        errors: list[str] = []
+        skipped: list[str] = []
+        if self.demo:
+            names = list(self.sources)
+        elif spec.sources:
+            names = spec.sources
+        else:
+            names = self.search_sources()
+            if not names:
+                skipped.append("검색할 쇼핑몰 없음 (API 키 미입력 → config/settings.local.toml)")
         if newest:      # 최신순 정렬이 없는 소스(야후)는 신상 발견에서 제외
             names = [n for n in names if n not in self.sources or self.sources[n].supports_newest]
-            if not names:
-                errors.append("최신순 검색을 지원하는 소스 없음 (신상 발견은 rakuten 필요)")
+            if not names and not skipped:
+                skipped.append("최신순 검색을 지원하는 소스 없음 (신상 발견은 rakuten 필요)")
         for n in names:
             src = self.sources.get(n)
             if src is None:
-                errors.append(f"소스 '{n}' 비활성/키 없음")
+                skipped.append(f"소스 '{n}' 비활성/키 없음")
                 continue
             try:
                 offers += src.search(Query(spec.keyword, spec.jan, newest, spec.id))
             except Exception as e:
                 errors.append(f"{n}: {e}")
-        return offers, errors
+        return offers, errors, skipped
 
     def priced(self, spec: Spec, offer: Offer) -> Result:
         r = Result(spec=spec)
@@ -94,7 +114,7 @@ class Runner:
         if reason := check_spec(self.cfg, spec):
             res.blocked_reason = reason
             return res
-        offers, errors = self.fetch(spec, newest=False)
+        offers, errors, skipped = self.fetch(spec, newest=False)
         ok = [o for o in filter_offers(self.cfg, offers, spec, res.excluded) if o.in_stock]
         if ok:
             stats = res.excluded
@@ -102,19 +122,23 @@ class Runner:
             res.excluded = stats
             if not spec.trusted_shops and self.cfg["categories"][spec.category].get("check_shop", True):
                 res.alerts.append(f"판매처 '{res.offer.shop}' 정품 취급처인지 확인 후 영수증 보관")
-        if errors and not offers:
+        if errors or (skipped and not offers):
+            # 쇼핑몰 하나라도 조회에 실패하면 품절·재입고·원가 변동을 판단하지 않음
+            # (실패한 쪽에만 재고가 있었으면 가짜 '품절' 알림이 나가고 다음 실행에 '재입고'가 나감)
             res.failed = True
-            res.alerts.append("조회 실패: " + " / ".join(errors))
+            res.alerts.append("조회 실패: " + " / ".join(errors + skipped))
         else:
+            if skipped:
+                res.alerts.append("검색 못 한 쇼핑몰: " + " / ".join(skipped))
             self.store.track(res, self.ts, self.cfg["alerts"]["price_change_rate"])
         return res
 
     def run_discover(self, spec: Spec) -> tuple[list[Result], str]:
         if reason := check_spec(self.cfg, spec):
             return [], f"건너뜀: {reason}"
-        offers, errors = self.fetch(spec, newest=True)
-        if errors and not offers:
-            return [], "조회 실패: " + " / ".join(errors)
+        offers, errors, skipped = self.fetch(spec, newest=True)
+        if (errors or skipped) and not offers:
+            return [], "조회 실패: " + " / ".join(errors + skipped)
         stats: dict[str, int] = {}
         ok = [o for o in filter_offers(self.cfg, offers, spec, stats) if o.in_stock]
         first = self.store.is_first_watch(spec.name)
@@ -272,6 +296,14 @@ def _fallback_webhook() -> str:
 
 
 # ---------------------------------------------------------------- 실행
+def save_latest(error: str, demo: bool, markets: list[str], rows: list[tuple[str, Result]]) -> None:
+    """reports/latest.json 덮어쓰기. 실패해도 감시 실행 자체는 계속"""
+    try:
+        write_latest(BASE / "reports" / "latest.json", error or None, demo, markets, rows)
+    except Exception as e:
+        print(f"[경고] latest.json 저장 실패: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 def run_all(cfg: dict, args, specs: list[Spec], all_specs: list[Spec]) -> str:
     """감시 1회 실행. 문제가 있으면 설명 문자열, 없으면 "" 반환"""
     problems: list[str] = []
@@ -284,7 +316,14 @@ def run_all(cfg: dict, args, specs: list[Spec], all_specs: list[Spec]) -> str:
     if not run.sources:
         msg = "사용 가능한 소스가 없습니다. config/settings.local.toml 에 API 키를 넣거나 --demo로 실행하세요."
         print(msg, file=sys.stderr)
-        return " / ".join(problems + [msg])
+        problem = " / ".join(problems + [msg])
+        save_latest(problem, args.demo, list(cfg["markets"]), [])
+        return problem
+    if not run.search_sources() and any(not s.sources for s in specs):
+        # manual(수동 가격)만 준비됨 → sources 를 비운 상품은 하나도 검색되지 않음 (키 미입력·만료)
+        msg = "검색할 쇼핑몰이 없습니다 → config/settings.local.toml 에 라쿠텐 키를 넣거나, 크롬을 설치해 [sources.rakuten_web] 을 켜세요."
+        print(msg, file=sys.stderr)
+        problems.append(msg)
     markets = [m["name"] for m in cfg["markets"].values()]
     print(f"\n환율: {run.fx.summary()}\n소스: {', '.join(run.sources)}")
 
@@ -333,11 +372,15 @@ def run_all(cfg: dict, args, specs: list[Spec], all_specs: list[Spec]) -> str:
     out = BASE / "reports" / f"report_{datetime.now():%Y%m%d_%H%M}.csv"
     write_csv(rows, markets, out)
     print(f"\n리포트 저장: {out}\n")
-    if not args.demo:
+    if getattr(args, "no_alert", False):
+        print(f"[--no-alert] 웹훅 알림 {len([m for m in notify if not m.startswith('*')])}건 보내지 않음")
+    elif not args.demo:
         send_webhook(cfg["alerts"].get("webhook_url", ""), notify)
     if tried and len(failures) == tried:
         problems.append(f"감시 {tried}건 모두 조회 실패 (API 키 만료·네트워크 확인) → {failures[0]}")
-    return " / ".join(problems)
+    problem = " / ".join(problems)
+    save_latest(problem, args.demo, list(cfg["markets"]), rows)
+    return problem
 
 
 def main() -> None:
@@ -350,6 +393,8 @@ def main() -> None:
     ap.add_argument("--test-alert", action="store_true", help="웹훅으로 테스트 메시지 전송")
     ap.add_argument("--probe", nargs="?", const="", default=None, metavar="검색어",
                     help="API 키 확인: 소스마다 검색 1번 해서 응답 출력")
+    ap.add_argument("--no-alert", action="store_true",
+                    help="시험 실행: 웹훅 알림만 보내지 않음 (가격 조회·history.db·리포트·latest.json 은 평소대로, health.json 은 그대로)")
     args = ap.parse_args()
 
     cfg: dict | None = None
@@ -368,8 +413,12 @@ def main() -> None:
     except Exception as e:              # 프로그램 전체가 죽는 경우 (설정 파일 문법 오류 등)
         traceback.print_exc()
         problem = f"프로그램 오류 {type(e).__name__}: {e}"
+        if not (args.check or args.test_alert or args.probe is not None):
+            save_latest(problem, args.demo, list((cfg or {}).get("markets", {})), [])
 
-    if args.demo:
+    if args.demo or args.no_alert:      # 예시·시험 실행은 실행 상태(health.json)·실패 알림을 건드리지 않음
+        if problem:
+            print(f"[실패] {problem}", file=sys.stderr)
         sys.exit(1 if problem else 0)
     msgs = health_messages(problem)
     if msgs:

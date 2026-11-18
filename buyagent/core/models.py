@@ -53,6 +53,7 @@ class Spec:
     bundle_size: int = 0                                   # 0이면 카테고리/CLI 기본값
     my_prices: dict[str, int] = field(default_factory=dict)
     discover: bool = False
+    hub_product_id: int | None = None                      # trade_hub 품목 번호 (대시보드 연결용)
 
 
 @dataclass
@@ -63,6 +64,7 @@ class Quote:
     my_price: int | None = None
     my_margin: int | None = None
     my_ok: bool | None = None
+    key: str = ""                 # settings.toml [markets.<key>] (예: coupang)
 
 
 @dataclass

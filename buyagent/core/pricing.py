@@ -78,7 +78,7 @@ def price_offer(cfg: dict, fx: FX, res: Result, offer: Offer, bundle_default: in
         denom = 1 - fee - pr["min_margin_rate"]
         p2 = res.cost_krw / denom if denom > 0 else float("inf")
         rec = round_price(max(p1, p2), pr["round_to"], pr["price_ending"])
-        q = Quote(m["name"], rec, margin_at(rec, res.cost_krw, fee))
+        q = Quote(m["name"], rec, margin_at(rec, res.cost_krw, fee), key=key)
         mp = spec.my_prices.get(key, 0)
         if mp > 0:
             q.my_price, q.my_margin = mp, margin_at(mp, res.cost_krw, fee)
@@ -89,10 +89,14 @@ def price_offer(cfg: dict, fx: FX, res: Result, offer: Offer, bundle_default: in
         res.quotes.append(q)
 
     mult_limit = pr.get("max_price_multiple")
-    if mult_limit and res.quotes:
+    if mult_limit and res.quotes and offer.price > 0:
         mult = min(q.recommended_price for q in res.quotes) / fx.to_krw(offer.price, offer.currency)
         if mult > mult_limit:
             hint = " (묶음 배송·세트 구성 검토)" if bundle == 1 else ""
             res.alerts.append(f"권장가가 현지가의 {mult:.1f}배 → 가격 경쟁력 낮음{hint}")
     if not offer.shipping_known:
-        res.alerts.append(f"현지 배송비 미확인 → {offer.shipping:,.0f} {offer.currency}로 가정")
+        if offer.source == "manual":    # 수동 가격의 빈 shipping 칸 → 사람이 확인해서 채워야 함
+            res.alerts.append(f"현지 배송비 미확인 → 확인 후 shipping 입력 "
+                              f"(지금은 {offer.shipping:,.0f} {offer.currency}로 가정)")
+        else:
+            res.alerts.append(f"현지 배송비 미확인 → {offer.shipping:,.0f} {offer.currency}로 가정")

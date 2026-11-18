@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import csv
+import json
+import os
 import sys
+import tempfile
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -67,6 +70,69 @@ def write_csv(rows: list[tuple[str, Result]], markets: list[str], path: Path) ->
             msgs = ([r.blocked_reason] if r.blocked_reason else []) + r.events + r.alerts
             row += [r.notice, " / ".join(msgs)]
             w.writerow(row)
+
+
+def item_status(r: Result) -> str:
+    if r.blocked_reason:
+        return "blocked"
+    if r.failed:
+        return "error"
+    return "ok" if r.offer else "no_offer"
+
+
+def result_json(kind: str, r: Result) -> dict:
+    """latest.json 의 items 한 줄 (trade_hub 대시보드가 읽음 → 키 이름 바꾸지 말 것)"""
+    o = r.offer
+    return {
+        "kind": "감시" if kind == "고정" else kind,      # 감시 / 신상
+        "id": r.spec.id,
+        "hub_product_id": r.spec.hub_product_id,
+        "name": o.name if (kind == "신상" and o) else r.spec.name,
+        "category": r.spec.category,
+        "status": item_status(r),
+        "blocked_reason": r.blocked_reason or None,
+        "best_offer": None if not o else {
+            "source": o.source, "shop": o.shop, "url": o.url or None, "price": o.price,
+            "shipping": o.shipping if o.shipping_known else None,
+            "shipping_known": o.shipping_known, "currency": o.currency, "in_stock": o.in_stock,
+        },
+        "cost_krw": r.cost_krw if o and r.cost_krw else None,
+        "quotes": [{"market": q.key or q.market, "recommended_price": q.recommended_price,
+                    "margin": q.margin, "my_price": q.my_price, "my_margin": q.my_margin}
+                   for q in r.quotes],
+        "warnings": list(r.alerts),
+        "events": list(r.events),
+        "notice": r.notice or None,
+    }
+
+
+def write_latest(path: Path, error: str | None, demo: bool, markets: list[str],
+                 rows: list[tuple[str, Result]]) -> None:
+    """실행 결과를 JSON 으로 덮어씀. 임시 파일에 쓴 뒤 이름 바꾸기 → 읽는 쪽이 반쯤 쓰인 파일을 보지 않음"""
+    data = {
+        "ok": not error,
+        "error": error or None,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "demo": demo,
+        "markets": markets,
+        "items": [result_json(k, r) for k, r in rows],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".latest_", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        for i in range(5):          # Windows: 대시보드가 파일을 여는 순간이면 잠깐 실패할 수 있음
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if i == 4:
+                    raise
+                time.sleep(0.2)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def _chunks(lines: list[str], limit: int) -> Iterator[str]:

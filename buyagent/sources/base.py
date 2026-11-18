@@ -36,6 +36,7 @@ class Source:
     required_keys: tuple[str, ...] = ()      # settings에 반드시 있어야 하는 키
     recommended_keys: tuple[str, ...] = ()   # 없어도 시도는 하지만 --check 에서 주의 표시
     supports_newest: bool = True             # 최신순 정렬 지원 여부 (False면 신상 발견에서 제외)
+    explicit_only: bool = False              # True면 products.csv sources 에 이름을 적은 상품에만 사용 (예: manual)
 
     def __init__(self, conf: dict, cfg: dict):
         self.conf = conf          # [sources.<name>] 섹션

@@ -24,7 +24,8 @@ buyagent/
 │   ├── categories.toml     카테고리 규칙, 차단 키워드, 경고 키워드
 │   └── glossary.toml       한글 → 일본어 단어장 (규칙에 한글로 쓸 때)
 ├── sources/                쇼핑몰 플러그인 (파일 하나 = 쇼핑몰 하나)
-│   ├── rakuten.py          라쿠텐 (일본)
+│   ├── rakuten.py          라쿠텐 (일본, API)
+│   ├── rakuten_web.py      라쿠텐 (일본, API 키 없이 검색 페이지 수집 · 크롬 필요)
 │   ├── yahoo.py            Yahoo! 쇼핑 (일본)
 │   ├── manual.py           수동 가격 (catalog/manual_prices.csv)
 │   ├── demo.py             예시 데이터 (--demo)
@@ -48,6 +49,7 @@ python main.py --bundle 5        # 5개를 한 번에 배송받는 기준으로 
 python main.py --only chiikawa   # ID에 'chiikawa'가 들어간 것만 실행
 python main.py --probe           # API 키 확인: 쇼핑몰마다 검색 1번 (--probe "검색어")
 python main.py --test-alert      # 웹훅으로 테스트 메시지 보내기
+python main.py --no-alert        # 시험 실행: 웹훅 알림만 안 보냄 (조회·history.db·리포트·latest.json 은 평소대로)
 python -m unittest               # 코드 고친 뒤 기존 기능이 그대로인지 확인
 ```
 
@@ -64,6 +66,7 @@ API 키와 웹훅 주소는 `config/settings.local.toml`에 넣어요. 이 파�
 
 - **Yahoo! 쇼핑:** https://e.developer.yahoo.co.jp/register 에서 앱을 등록하면 나오는 Client ID를 `app_id`에 넣어요.
 - **라쿠텐:** https://webservice.rakuten.co.jp/ 에서 앱을 등록하면 나오는 `applicationId`를 넣어요. access key가 함께 나오면 `access_key`에도 넣고, 없으면 비워 둔 채 `--probe`로 확인해요.
+- **라쿠텐 키 없이:** `[sources.rakuten_web]`이 PC의 크롬을 화면 없이 띄워 검색 페이지를 읽어요. 키는 필요 없지만 정렬이 안 돼서(robots.txt가 금지) 가격순·최신순 검색을 못 하고, 그래서 신상 발견에는 쓰이지 않아요. 검색 1건에 몇 초 걸려요. 라쿠텐 API 키를 받으면 `[sources.rakuten_web] enabled = false`로 끄세요 (둘 다 켜면 같은 상품을 두 번 검색해요).
 - **Discord 웹훅:** 채널 설정 → 연동 → 웹후크 → 새 웹후크 → URL 복사.
 
 ### 설정 점검 (`--check`)
@@ -119,6 +122,7 @@ python research.py 키캡 손목받침 장패드 기계식키보드
 
 1. `products.csv`에 상품을 추가하고, `sources` 열에 `manual`을 써요.
 2. `manual_prices.csv`에 같은 `id`로 가격, 통화(CNY), 판매처, 확인 날짜(`checked`)를 적어요.
+3. `shipping`(판매자 → 배대지 현지 배송비)은 확인한 값을 적어요. **무료배송이면 `0`을 꼭 적으세요.** 빈 칸은 "미확인"으로 보고 0으로 가정해 계산한 뒤 "현지 배송비 미확인 → 확인 후 shipping 입력" 알림을 보내요.
 
 그러면 원가·권장가 계산, 가격이 바뀔 때 알림, 품절(`in_stock = N`) 알림이 다른 쇼핑몰과 똑같이 돼요. `checked` 날짜가 7일 넘게 지나면 "가격 다시 확인" 알림이 와요.
 
@@ -140,6 +144,7 @@ python research.py 키캡 손목받침 장패드 기계식키보드
 | sources | 특정 쇼핑몰만 검색 (비우면 전체) | `rakuten\|yahoo` |
 | shipping_profile / bundle_size | 카테고리 기본값을 이 상품만 다르게 | `large` / `3` |
 | my_price_coupang / my_price_naver | 현재 내 판매가 (마진 점검용) | `29900` |
+| hub_product_id | trade_hub 품목 번호 (대시보드 연결용, 비워도 됨). 정수가 아니면 `--check`에서 경고 | `23` |
 | active | `N`이면 건너뜀 | `Y` |
 
 ### 2. 새 품목 종류 추가: `config/categories.toml`
@@ -221,7 +226,16 @@ except = ["특전포함"]          # → ["特典付き", "特典付", "特典�
 - 감시 대상 **전부** 조회에 실패했을 때 (API 키 만료, 인터넷 끊김 등)
 - `--check` 기준 설정 오류가 있을 때
 
+실행 실패면 종료 코드 1, 정상이면 0으로 끝나요 (일부 상품이 차단·품절이어도 정상). `--no-alert`·`--demo` 실행은 이 알림을 보내지 않고 `health.json`도 바꾸지 않아요.
+
 같은 문제가 계속되면 매시간 보내지 않고 **하루에 한 번만** 다시 알려요. 문제가 해결되면 **✅ 정상 복구** 알림이 1번 가요. 상태는 `health.json`에 저장돼요.
+
+### 최신 결과 JSON (`reports/latest.json`)
+
+실행이 끝날 때마다(실패해도) `reports/latest.json`을 덮어써요. trade_hub 대시보드가 읽는 파일이라 **키 이름을 바꾸면 안 돼요.** 임시 파일에 다 쓴 뒤 이름을 바꾸므로 읽는 쪽이 반쯤 쓰인 파일을 보지 않아요. `report_*.csv`도 그대로 남아요.
+
+- 맨 위: `ok`, `error`(없으면 null), `generated_at`, `demo`, `markets`(예: `coupang`, `naver`), `items`
+- `items` 한 줄: `kind`(감시/신상), `id`, `hub_product_id`, `name`, `category`, `status`(`ok`/`blocked`/`no_offer`/`error`), `blocked_reason`, `best_offer`(source·shop·url·price·shipping·shipping_known·currency·in_stock, 배송비 미확인이면 shipping은 null), `cost_krw`, `quotes`(market·recommended_price·margin·my_price·my_margin), `warnings`(목록), `events`(목록), `notice`
 
 ### 알림 규칙
 

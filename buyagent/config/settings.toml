@@ -20,6 +20,14 @@ default_shipping = 800       # 배송비 별도 상품의 가정 배송비 (엔)
 min_interval = 1.1           # 호출 간격(초). 라쿠텐은 초당 1회 제한
 retries = 2                  # 429·5xx·네트워크 오류 시 재시도 횟수
 
+[sources.rakuten_web]         # API 키 없이 라쿠텐 검색 페이지를 읽음 (PC의 크롬을 화면 없이 실행)
+enabled = true
+pages = 2                    # 검색 결과 몇 페이지까지 (1페이지 = 45개). 정렬이 안 돼서 2 이상 권장
+min_interval = 5             # 검색 간격(초). 너무 줄이면 봇으로 차단될 수 있음
+default_shipping = 800       # 배송비 별도 상품의 가정 배송비 (엔)
+retries = 1
+chrome_path = ""             # 비우면 자동으로 찾음 (크롬 → 엣지)
+
 [sources.yahoo]
 enabled = true
 app_id = ""                  # → settings.local.toml 에 입력

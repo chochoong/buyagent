@@ -72,7 +72,9 @@ def filter_offers(cfg: dict, offers: list[Offer], spec: Spec,
         n = norm(o.name)
         reason = ""
         bc = blocked_category(cfg, o.name, spec.category)
-        if o.used:
+        if o.price <= 0:          # 수동 가격 칸을 비웠거나 API가 0을 돌려줌 → 최저가로 잘못 뽑히고 계산이 죽음
+            reason = "가격 없음"
+        elif o.used:
             reason = "중고"
         elif bc:
             reason = f"차단:{category_label(cfg, bc)}"

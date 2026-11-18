@@ -103,6 +103,12 @@ def _int(v: str | None) -> int:
         return 0
 
 
+def hub_id(v: str | None) -> int | None:
+    """hub_product_id 칸: 비었거나 정수가 아니면 None (정수가 아니면 --check 에서 경고)"""
+    v = (v or "").strip()
+    return int(v) if v.isdigit() else None
+
+
 def _rows(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -127,6 +133,7 @@ def load_specs(base: Path, markets: dict) -> list[Spec]:
             shipping_profile=(r.get("shipping_profile") or "").strip(),
             bundle_size=_int(r.get("bundle_size")),
             my_prices={k: _int(r.get(f"my_price_{k}")) for k in markets},
+            hub_product_id=hub_id(r.get("hub_product_id")),
         ))
     for r in _rows(base / "catalog" / "discover.csv"):
         name = r["name"].strip()

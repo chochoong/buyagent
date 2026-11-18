@@ -119,6 +119,13 @@ def validate(cfg: dict, specs: list[Spec], registry: dict, base: Path) -> list[t
         for key in markets:
             if f"my_price_{key}" not in header:
                 warn(f"products.csv 에 my_price_{key} 열 없음 → {markets[key].get('name', key)} 현재가 마진 점검 안 됨")
+        if "hub_product_id" in header:
+            with open(pfile, newline="", encoding="utf-8-sig") as f:
+                for r in csv.DictReader(f):
+                    v = (r.get("hub_product_id") or "").strip()
+                    if v and not v.isdigit():
+                        warn(f"상품 {(r.get('id') or '').strip()}: hub_product_id '{v}' 가 정수가 아님 "
+                             "→ trade_hub 품목과 연결 안 됨")
 
     # ---- 상품 목록 ----
     dup = [i for i, n in Counter(s.id for s in specs).items() if n > 1]

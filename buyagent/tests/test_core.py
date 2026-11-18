@@ -243,10 +243,11 @@ class TestSources(unittest.TestCase):
         self.assertFalse(REGISTRY["yahoo"].supports_newest)
         run = M.Runner(cfg(), True, 0)
         run.sources = {"yahoo": REGISTRY["yahoo"]({"enabled": True, "app_id": "x"}, CFG)}
-        offers, errors = run.fetch(Spec(id="d", name="d", category="acrylic", keyword="x",
-                                        discover=True), newest=True)
+        offers, errors, skipped = run.fetch(Spec(id="d", name="d", category="acrylic", keyword="x",
+                                                 discover=True), newest=True)
         self.assertEqual(offers, [])
-        self.assertTrue(any("최신순" in e for e in errors), "야후에 요청하지 않고 이유를 알려줌")
+        self.assertEqual(errors, [])
+        self.assertTrue(any("최신순" in e for e in skipped), "야후에 요청하지 않고 이유를 알려줌")
         self.assertEqual(self.s.gets, [])
 
     def test_probe(self):
@@ -333,6 +334,90 @@ class TestRunFailures(TmpDirTest):
             problem = M.run_all(c, args, specs, specs)
         self.assertIn("2건 모두 조회 실패", problem)
         self.assertIn("invalid key", problem)
+
+    def test_only_manual_ready_alerts(self):
+        """라쿠텐 키가 없고 manual 만 준비됨 → '소스 없음'이 묻히지 않고 실행 실패로 알림"""
+        f = self.tmp / "manual.csv"
+        f.write_text("id,price,currency,origin,shipping,in_stock,shop,url,checked\n", encoding="utf-8")
+        c = self._cfg()                                    # 라쿠텐 키 없음
+        c["sources"]["manual"] = {"enabled": True, "file": str(f)}
+        args = type("A", (), {"demo": False, "bundle": 0})()
+        specs = [Spec(id="a", name="a", category="watch", keyword="x", must_include=["x"])]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            problem = M.run_all(c, args, specs, specs)
+        self.assertIn("검색할 쇼핑몰이 없습니다", problem)
+        self.assertIn("모두 조회 실패", problem, "상품도 '재고 없음'이 아니라 조회 실패로 처리")
+
+    def test_no_alert_skips_webhook_only(self):
+        c = self._cfg(application_id="APP")
+        item = {"itemCode": "s:1", "itemName": "セイコー SBTQ041", "itemPrice": 15000, "postageFlag": 0,
+                "availability": 1, "shopName": "S", "itemUrl": "u"}
+        self.s.responses = [(200, {"Items": [item]})] * 5
+        M.load_config = lambda *a, **k: c
+        (self.tmp / "catalog").mkdir()
+        (self.tmp / "catalog" / "products.csv").write_text(
+            "id,name,category,keyword,must_include,active\nSBTQ041,세이코,watch,セイコー SBTQ041,SBTQ041,Y\n",
+            encoding="utf-8")
+        sys.argv = ["main.py", "--no-alert"]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as cm:
+                M.main()
+        self.assertEqual(cm.exception.code, 0)              # 일부 경고가 있어도 정상 실행이면 0
+        self.assertEqual(self.s.posts, [], "웹훅을 보내면 안 됨")
+        self.assertTrue((self.tmp / "history.db").exists(), "가격 기록은 평소대로")
+        self.assertTrue(self._latest_ok())
+        self.assertFalse((self.tmp / "health.json").exists())
+
+    def _latest_ok(self):
+        d = json.loads((self.tmp / "reports" / "latest.json").read_text(encoding="utf-8"))
+        return d["ok"] and d["items"][0]["status"] == "ok"
+
+
+# ---------------------------------------------------------------- 일부 쇼핑몰만 실패 / 가격 0
+class FakeSrc:
+    explicit_only = False
+    supports_newest = True
+
+    def __init__(self, offers=None, error=""):
+        self.offers, self.error = offers or [], error
+
+    def search(self, q):
+        if self.error:
+            raise RuntimeError(self.error)
+        return self.offers
+
+
+class TestPartialFailure(TmpDirTest):
+    def setUp(self):
+        super().setUp()
+        c = cfg()
+        c["fx"]["auto"] = False
+        self.run = M.Runner(c, False, 0)
+        self.run.store = Store(self.tmp / "t.db")
+        self.spec = Spec(id="p", name="p", category="kitchen", keyword="x")
+
+    def test_partial_failure_no_fake_soldout(self):
+        instock = Offer("b", "b1", "x", 4000, "JPY", "JP")
+        soldout = Offer("a", "a1", "x", 3000, "JPY", "JP", in_stock=False)
+        self.run.sources = {"a": FakeSrc([soldout]), "b": FakeSrc([instock])}
+        self.assertIsNotNone(self.run.run_product(self.spec).offer)        # 기록: 재고 있음
+        self.run.sources["b"] = FakeSrc(error="HTTP 503")                   # 재고 있던 쪽만 일시 실패
+        r = self.run.run_product(self.spec)
+        self.assertTrue(r.failed)
+        self.assertFalse(any("재고 없음" in e for e in r.events), "가짜 품절 알림 없음")
+        self.assertTrue(any("503" in a for a in r.alerts), "실패한 쇼핑몰을 알려줌")
+        self.run.sources["b"] = FakeSrc([instock])                          # 복구
+        r = self.run.run_product(self.spec)
+        self.assertEqual(r.events, [], "가짜 재입고 알림도 없음")
+
+    def test_zero_price_ignored(self):
+        free = Offer("a", "z", "x", 0, "CNY", "CN")
+        real = Offer("a", "r", "x", 299, "CNY", "CN")
+        self.run.sources = {"a": FakeSrc([free, real])}
+        r = self.run.run_product(self.spec)
+        self.assertFalse(r.failed)
+        self.assertEqual(r.offer.key, "r", "가격 0은 최저가로 뽑히지 않음")
+        self.assertEqual(r.excluded.get("가격 없음"), 1)
 
 
 # ---------------------------------------------------------------- 중국: 키보드 구매대행 (수동 가격)
@@ -527,6 +612,183 @@ class TestValidate(unittest.TestCase):
         msgs = " / ".join(m for _, m in self._issues(c, specs))
         self.assertIn("최신순 정렬이 없어", msgs)
         self.assertIn("신상 검색이 안 됨", msgs)
+
+
+
+class TestRakutenWeb(unittest.TestCase):
+    """API 키 없이 검색 페이지를 읽는 소스: HTML 파싱만 검사 (크롬은 띄우지 않음)"""
+    CARD = ('<div class="dui-card searchresultitem x--1" data-id="{iid}" data-shop-id="77" '
+            'data-track-price="{p}"><a href="https://item.rakuten.co.jp/shop/{iid}/?rafcid=1">img</a>'
+            '<h2><a title="t" data-link="item" href="https://item.rakuten.co.jp/shop/{iid}/">'
+            'スタンレー &amp; タンブラー {iid}</a></h2><div class="price--3"><div class="price--x">{p}'
+            '<span>円〜</span></div>{free}</div><div class="points" data-price="{p}" data-max-price="{mx}"></div>'
+            '<div class="content merchant _ellipsis"><span class="dui-icon"></span>'
+            '<a href="https://www.rakuten.co.jp/shop/">テスト店</a></div></div>')
+
+    def card(self, iid, p, mx=None, free=True):
+        return self.CARD.format(iid=iid, p=p, mx=mx or p,
+                                free='<span class="free-shipping-label--1">送料無料</span>' if free else "")
+
+    def test_parse(self):
+        from sources.rakuten_web import parse_search_html
+        page = "<html>" + self.card(1, 3300, 5170) + self.card(2, 900, free=False) + self.card(1, 3300) + "</html>"
+        items = parse_search_html(page)
+        self.assertEqual(len(items), 2)                      # 같은 상품(광고 중복)은 한 번만
+        a, b = items
+        self.assertEqual((a["price"], a["max_price"], a["free_shipping"]), (3300, 5170, True))
+        self.assertEqual(a["name"], "スタンレー & タンブラー 1")
+        self.assertEqual(a["shop"], "テスト店")
+        self.assertEqual(a["url"], "https://item.rakuten.co.jp/shop/1/")
+        self.assertFalse(b["free_shipping"])
+
+    def test_blocked_page_raises(self):
+        src = REGISTRY["rakuten_web"]({"enabled": True, "min_interval": 0, "retries": 0}, CFG)
+        src.fetch_html = lambda url: "Reference #18.abc"     # 봇 차단 응답 → 0건(품절)이 아니라 오류
+        with self.assertRaises(RuntimeError):
+            src.search(Query("x"))
+
+    def test_offers(self):
+        src = REGISTRY["rakuten_web"]({"enabled": True, "min_interval": 0, "default_shipping": 800}, CFG)
+        src.fetch_html = lambda url: self.card(1, 3300, 5170) + self.card(2, 900, free=False)
+        o1, o2 = src.search(Query("x"))
+        self.assertEqual((o1.key, o1.shipping, o1.shipping_known), ("rkw:77:1", 0, True))
+        self.assertTrue(o1.notes)                            # 옵션별 가격 차이 안내
+        self.assertEqual((o2.shipping, o2.shipping_known), (800, False))
+
+
+class TestManualShipping(TmpDirTest):
+    """수동 가격의 shipping 빈 칸은 '무료배송 확인'이 아니라 '미확인' (원가 과소평가 방지)"""
+
+    def setUp(self):
+        super().setUp()
+        self.saved = M.BASE
+        M.BASE = self.tmp                                  # Runner 가 만드는 DB 를 임시 폴더로
+
+    def tearDown(self):
+        M.BASE = self.saved
+        super().tearDown()
+
+    def _offers(self):
+        f = self.tmp / "mp.csv"
+        f.write_text("id,price,currency,origin,shipping,in_stock,shop,url,checked,memo\n"
+                     "a,10,USD,CN,,Y,blank,,2026-11-17,\n"
+                     "a,12,USD,CN,0,Y,zero,,2026-11-17,\n"
+                     "a,14,USD,CN,3.5,Y,num,,2026-11-17,\n", encoding="utf-8")
+        src = REGISTRY["manual"]({"enabled": True, "file": str(f)}, CFG)
+        return src.search(Query("x", spec_id="a"))
+
+    def test_three_cases(self):
+        blank, zero, num = self._offers()
+        self.assertEqual((blank.shipping, blank.shipping_known), (0, False))
+        self.assertEqual((zero.shipping, zero.shipping_known), (0, True))
+        self.assertEqual((num.shipping, num.shipping_known), (3.5, True))
+
+    def test_alert(self):
+        blank, zero, num = self._offers()
+        run = M.Runner(cfg(), True, 0)
+        spec = Spec(id="a", name="a", category="watch", keyword="x")
+        msg = "현지 배송비 미확인 → 확인 후 shipping 입력"
+        self.assertTrue(any(msg in a for a in run.priced(spec, blank).alerts))
+        for o in (zero, num):
+            self.assertFalse(any("배송비 미확인" in a for a in run.priced(spec, o).alerts))
+
+
+class TestHubProductId(TmpDirTest):
+    HEAD = ("id,name,category,keyword,jan,must_include,exclude,trusted_shops,sources,"
+            "shipping_profile,bundle_size,my_price_coupang,my_price_naver,active,memo")
+
+    def _write(self, text):
+        (self.tmp / "catalog").mkdir(exist_ok=True)
+        (self.tmp / "catalog" / "products.csv").write_text(text, encoding="utf-8")
+        return load_specs(self.tmp, CFG["markets"])
+
+    def test_old_csv_without_column(self):
+        specs = self._write(self.HEAD + "\na,A,watch,x,,,,,,,,0,0,Y,\n")
+        self.assertIsNone(specs[0].hub_product_id)
+
+    def test_column(self):
+        specs = self._write(self.HEAD + ",hub_product_id\n"
+                            "a,A,watch,x,,,,,,,,0,0,Y,,23\n"
+                            "b,B,watch,y,,,,,,,,0,0,Y,,\n"
+                            "c,C,watch,z,,,,,,,,0,0,Y,,2x\n")
+        self.assertEqual([s.hub_product_id for s in specs], [23, None, None])
+        issues = [m for _, m in validate(CFG, specs, REGISTRY, self.tmp)]
+        self.assertTrue(any("hub_product_id '2x'" in m for m in issues))
+        self.assertEqual(sum("hub_product_id" in m for m in issues), 1)
+
+
+class TestLatestJson(TmpDirTest):
+    """--demo 실행 → reports/latest.json 형식 (trade_hub 대시보드가 읽는 키)"""
+
+    def setUp(self):
+        super().setUp()
+        self.saved = (M.BASE, M.HEALTH_FILE, M.load_config, sys.argv)
+        shutil.copytree(BASE / "catalog", self.tmp / "catalog")
+        shutil.copytree(BASE / "config", self.tmp / "config",
+                        ignore=shutil.ignore_patterns("settings.local.toml*"))   # 실제 키는 복사 안 함
+        M.BASE, M.HEALTH_FILE = self.tmp, self.tmp / "health.json"
+
+    def tearDown(self):
+        M.BASE, M.HEALTH_FILE, M.load_config, sys.argv = self.saved
+        super().tearDown()
+
+    def _main(self, *argv):
+        sys.argv = ["main.py", *argv]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as cm:
+                M.main()
+        return cm.exception.code
+
+    def _latest(self):
+        return json.loads((self.tmp / "reports" / "latest.json").read_text(encoding="utf-8"))
+
+    def test_demo_format(self):
+        self.assertEqual(self._main("--demo"), 0)
+        d = self._latest()
+        self.assertTrue({"error", "demo", "markets", "items"} <= set(d))
+        self.assertIsNone(d["error"])
+        self.assertTrue(d["ok"] and d["demo"])
+        self.assertEqual(d["markets"], list(CFG["markets"]))
+        keys = {"kind", "id", "hub_product_id", "name", "category", "status", "blocked_reason",
+                "best_offer", "cost_krw", "quotes", "warnings", "events", "notice"}
+        offer_keys = {"source", "shop", "url", "price", "shipping", "shipping_known", "currency", "in_stock"}
+        self.assertTrue(d["items"])
+        for it in d["items"]:
+            self.assertEqual(set(it), keys)
+            self.assertIn(it["kind"], ("감시", "신상"))
+            self.assertIn(it["status"], ("ok", "blocked", "no_offer", "error"))
+            self.assertIsInstance(it["warnings"], list)
+            self.assertIsInstance(it["events"], list)
+            if it["best_offer"]:
+                self.assertEqual(set(it["best_offer"]), offer_keys)
+                if not it["best_offer"]["shipping_known"]:
+                    self.assertIsNone(it["best_offer"]["shipping"])
+            for q in it["quotes"]:
+                self.assertEqual(set(q), {"market", "recommended_price", "margin", "my_price", "my_margin"})
+                self.assertIn(q["market"], d["markets"])
+            if it["status"] == "blocked":
+                self.assertTrue(it["blocked_reason"])
+        self.assertIn("blocked", {i["status"] for i in d["items"]})
+        self.assertEqual(list((self.tmp / "reports").glob(".latest_*")), [], "임시 파일이 남으면 안 됨")
+
+    def test_failure_writes_error_and_exit_code(self):
+        c = load_config(self.tmp)
+        c["sources"] = {}
+        M.load_config = lambda *a, **k: c
+        self.assertEqual(self._main("--no-alert"), 1)       # 실행 실패 → 0 이 아닌 종료 코드
+        d = self._latest()
+        self.assertFalse(d["ok"])
+        self.assertIn("사용 가능한 소스가 없습니다", d["error"])
+        self.assertFalse((self.tmp / "health.json").exists(), "--no-alert 는 health.json 을 바꾸지 않음")
+
+    def test_crash_writes_error(self):
+        def boom(*a, **k):
+            raise ValueError("문법 오류")
+        M.load_config = boom
+        self.assertEqual(self._main("--no-alert"), 1)
+        d = self._latest()
+        self.assertIn("문법 오류", d["error"])
+        self.assertEqual(d["items"], [])
 
 
 if __name__ == "__main__":
