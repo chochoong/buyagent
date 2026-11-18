@@ -1,7 +1,8 @@
-id,name,category,keyword,jan,must_include,exclude,trusted_shops,sources,shipping_profile,bundle_size,my_price_coupang,my_price_naver,active,memo
-SBTQ041,세이코 SBTQ041,watch,セイコー SBTQ041,,SBTQ041,ベルト|バンド|ケース,,,,,0,0,Y,시계 예시
-chiikawa-acst-hachiware,치이카와 아크릴스탠드 하치와레,acrylic,ちいかわ アクリルスタンド ハチワレ,,ちいかわ|アクリルスタンド|ハチワレ,,,,,,0,0,Y,JAN 확인 후 입력 권장
-hobonichi-2027-a6,호보니치 테초 2027 A6 본체,stationery,ほぼ日手帳 2027 A6,,ほぼ日手帳|2027|A6|本体,カバー付き,,,,,0,0,Y,새 품목 예시(문구)
-stanley-quencher-40oz,스탠리 퀜처 40oz,kitchen,Stanley Quencher 40oz,,Quencher|40oz,,,,,,0,0,Y,다른 국가 상품 예시
-canmake-powder,캔메이크 마시멜로 파우더,cosmetics,キャンメイク マシュマロフィニッシュパウダー,,,,,,,,0,0,Y,차단 예시(화장품)
-kb-wired-75-example,예시 75% 유선 기계식 키보드,keyboard,75% 유선 기계식 키보드,,,,,manual,,,0,0,Y,중국 구매대행 예시 (가격은 catalog/manual_prices.csv)
+id,name,category,keyword,jan,must_include,exclude,trusted_shops,sources,shipping_profile,bundle_size,my_price_coupang,my_price_naver,active,memo,hub_product_id
+SBTQ041,세이코 SBTQ041,watch,セイコー SBTQ041,,SBTQ041,ベルト|バンド|ケース,,,,,0,0,Y,시계 예시,
+chiikawa-acst-hachiware,치이카와 아크릴스탠드 하치와레,acrylic,ちいかわ アクリルスタンド ハチワレ,,ちいかわ|アクリルスタンド|ハチワレ,,,,,,0,0,Y,JAN 확인 후 입력 권장,
+hobonichi-2027-a6,호보니치 테초 2027 A6 본체,stationery,ほぼ日手帳 2027 A6,,ほぼ日手帳|2027|A6|本体,カバー付き,,,,,0,0,Y,새 품목 예시(문구),
+stanley-quencher-40oz,스탠리 퀜처 40oz,kitchen,Stanley Quencher 40oz,,Quencher|40oz,,,,,,0,0,Y,다른 국가 상품 예시,
+canmake-powder,캔메이크 마시멜로 파우더,cosmetics,キャンメイク マシュマロフィニッシュパウダー,,,,,,,,0,0,Y,차단 예시(화장품),
+kb-wired-75-example,예시 75% 유선 기계식 키보드,keyboard,75% 유선 기계식 키보드,,,,,manual,,,0,0,Y,중국 구매대행 예시 (가격은 catalog/manual_prices.csv),
+ai-smart-glasses-with-camera,"AI안경 (카메라·실시간 번역·블루투스 오디오형 스마트안경, 디스플레이 없는 보급형)",smart_wearable,AI smart glasses with camera translation bluetooth audio,,,,,manual,,,0,0,Y,2번 공급처 발굴에서 가져옴 20261117_120713_ai_smart_glasses_with_camera_translation_bluetooth_audio,23

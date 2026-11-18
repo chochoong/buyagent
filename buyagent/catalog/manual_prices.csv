@@ -1,2 +1,4 @@
 id,price,currency,origin,shipping,in_stock,shop,url,checked,memo
 kb-wired-75-example,299,CNY,CN,0,Y,예시 타오바오 판매점,,2026-11-13,예시값 (타오바오·알리에서 확인한 가격으로 바꾸세요)
+ai-smart-glasses-with-camera,114.04,USD,CN,,Y,GUHUAVMI Smart Glasses Stores (AliExpress),https://www.aliexpress.us/item/3256811717738117.html,2026-11-17,D등급 36점 · 현지 배송비 미확인 · 가격대 USD 86.22-114.04
+ai-smart-glasses-with-camera,46.6,USD,CN,,Y,NAMOFOTO Official Store (AliExpress),https://www.aliexpress.us/item/3256810481521924.html,2026-11-17,"D등급 30점 · 현지 배송비 미확인 · 가격대 USD 46.60-46.60 (1개 소매가, 50개 단가 미확인)"

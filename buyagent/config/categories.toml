@@ -125,6 +125,23 @@ check_shop = false
 bulk_ok = true
 notice = ""
 
+# ---------------- 스마트 웨어러블 (구매대행 전용) ----------------
+# AI 안경·스마트워치·무선이어폰 등 무선 기기. 구매자 본인 사용 1대는 전파법 적합성평가 면제라
+# 구매대행은 가능하지만, 재고로 들여와 파는 사입은 모델별 KC 적합인증이 필요함.
+# 관세율: 스마트안경은 HS 분류(8517·8525·9004 등)에 따라 0~8% → 보수적으로 8%, 관세사 확인 후 수정
+[categories.smart_wearable]
+name = "스마트 웨어러블(AI 안경·스마트워치·무선이어폰)"
+allowed = true                 # 구매대행(구매자 1인 1대 개인 사용)만
+duty_rate = 0.08
+shipping_profile = "small"
+min_margin_krw = 15000
+min_margin_rate = 0.15
+check_shop = false
+ignore_blocks = ["electronics"]   # 'Bluetooth'·'充電' 등이 들어가도 전자제품 차단 안 함
+bulk_ok = false
+bulk_reason = "무선 기기 → 사입하려면 모델별 전파법 적합인증(KC) 필요, 배터리 내장 시 전기용품 안전 확인"
+notice = "본 상품은 해외구매대행 상품으로 구매자 본인 사용 목적 1대에 한해 전파법 적합성평가가 면제됩니다. 국내 A/S가 제공되지 않으며, 재판매가 금지됩니다."
+
 # ---------------- 등록 금지 (규제 품목) ----------------
 [categories.plush]
 name = "봉제인형·마스코트"
@@ -232,6 +249,10 @@ message = "배터리 포함 → 항공 운송 가능 여부를 배대지에 확�
 [[warn_rules]]
 keywords = ["无线", "蓝牙", "2.4G", "Bluetooth", "ワイヤレス", "wireless", "무선", "블루투스"]
 message = "무선 제품 → 전파법 적합인증 대상. 구매대행은 구매자 1인 1대(개인 사용)만 가능, 사입 불가"
+
+[[warn_rules]]
+keywords = ["camera", "Camera", "カメラ", "摄像", "拍照"]
+message = "카메라 탑재 → 몰래카메라·시험 부정행위를 연상시키는 문구 금지, 촬영음·촬영 표시등 여부 확인 (마켓 판매 제한 가능)"
 
 [[warn_rules]]
 keywords = ["RGB", "LED", "灯", "发光"]
