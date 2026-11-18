@@ -43,6 +43,15 @@ enabled = true
 file = "catalog/manual_prices.csv"
 stale_days = 7               # 이 일수보다 오래 확인 안 한 가격은 '재확인' 알림
 
+[sources.aliexpress]          # 알리 공식 제휴 API (python main.py --search ... --market aliexpress 에서만 사용)
+enabled = true               # 키 3개는 여기 말고 buyagent/.env 에: ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET / ALIEXPRESS_TRACKING_ID
+endpoint = "https://api-sg.aliexpress.com/sync"   # 키 받은 뒤 공식 문서로 확인 (2026-11-18 미검증)
+ship_to = "KR"
+page_size = 40
+default_shipping = 3         # 한국 배송비를 모를 때 가정 (USD). 상품 페이지에서 확인
+min_interval = 1.0
+retries = 2
+
 # ------------------------------------------------------------
 #  원산지(발송 국가)별 설정 - 새 국가를 붙일 때 여기에 추가
 # ------------------------------------------------------------
@@ -56,6 +65,10 @@ duty_free_usd = 200
 
 [origins.CN]
 name = "중국"
+duty_free_usd = 150
+
+[origins.CN_DIRECT]            # 알리처럼 판매자가 한국까지 직접 보내는 중국 상품 (배대지 안 거침)
+name = "중국(직배송)"
 duty_free_usd = 150
 
 # 배대지 요금표 (원, 1회 배송 기준). 카테고리/상품이 small·medium·large 중 하나를 고름
@@ -73,6 +86,11 @@ large = 45000
 small = 6000                 # 키캡·소품 (~1kg)
 medium = 9000                # 키보드 텐키리스 (~2kg)
 large = 14000                # 풀배열 키보드·데스크매트 (~3kg 이상)
+
+[shipping_profiles.CN_DIRECT]  # 직배송 → 배대지 요금 없음 (한국까지 배송비는 상품 가격 옆 현지 배송비로 계산)
+small = 0
+medium = 0
+large = 0
 
 # ------------------------------------------------------------
 [fx]

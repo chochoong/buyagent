@@ -36,7 +36,10 @@ CHROME_CANDIDATES = [
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 ]
-CARD_SPLIT = re.compile(r'<div class="dui-card searchresultitem[^"]*"')
+# 상품 카드: class 에 searchresultitem 이 들어간 div (dui-card → 2026-11 dui-item 으로 바뀐 적 있음 → 앞 이름은 안 봄)
+CARD_SPLIT = re.compile(r'<div class="(?=[^"]*\bsearchresultitem\b)[^"]*"')
+# 검색 결과가 정말 0건인 페이지 문구 (2026-11 확인: "ご指定の検索条件に該当する商品はみつかりませんでした")
+NO_RESULT = ("みつかりませんでした", "見つかりませんでした")
 _last_call = 0.0
 
 
@@ -130,9 +133,11 @@ class RakutenWeb(Source):
             for attempt in range(retries + 1):
                 doc = self.fetch_html(url)
                 items = parse_search_html(doc)
-                if items or "searchresultitem" in doc or "見つかりませんでした" in doc:
+                # 상품을 읽었거나, 진짜 0건 페이지(상품 카드 없음 + 0건 문구)면 정상
+                if items or (any(m in doc for m in NO_RESULT) and "searchresultitem" not in doc):
                     break
             else:
+                # 카드 표시는 있는데 하나도 못 읽음 = 구조 변경 → 조용히 0건(가짜 품절)으로 넘기지 않음
                 blocked = len(doc) < 2000
                 raise RuntimeError("라쿠텐 검색 페이지 " + (
                     "접속 차단(봇 감지)" if blocked else "구조 변경으로 상품을 못 읽음 → sources/rakuten_web.py 수정 필요"))

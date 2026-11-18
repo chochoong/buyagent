@@ -307,6 +307,11 @@ def model_words(keyword: str) -> list[str]:
 
 
 TRANSLATE_CALL = None       # 테스트에서 가짜 번역 함수로 바꿈 (None = 실제 Claude 호출)
+# --search --market 값 (trade_hub 사이트 선택과 같은 값). sources=None 이면 일반 검색 소스 전부(라쿠텐·야후)
+SEARCH_MARKETS = {
+    "rakuten": {"name": "라쿠텐(일본)", "lang": "ja", "sources": None},
+    "aliexpress": {"name": "알리익스프레스(중국)", "lang": "en", "sources": ["aliexpress"]},
+}
 
 
 def search(cfg: dict, args) -> int:
@@ -321,10 +326,14 @@ def search(cfg: dict, args) -> int:
               + "\n  ".join(f"{k:<16} {v.get('name', '')}{'' if v.get('allowed') else ' (등록 금지)'}"
                              for k, v in cats.items()), file=sys.stderr)
         return 2
+    mk = SEARCH_MARKETS.get(args.market)
+    if mk is None:
+        print(f"--market 은 {' / '.join(SEARCH_MARKETS)} 중 하나", file=sys.stderr)
+        return 2
     original = keyword if translate.has_korean(keyword) else None
-    if original:                        # 한글 검색어 → 일본어 (실패하면 검색하지 않음, search.json 그대로)
+    if original:                        # 한글 검색어 → 사이트 언어 (실패하면 검색하지 않음, search.json 그대로)
         try:
-            keyword = translate.to_japanese(keyword, BASE, load_glossary(BASE), call=TRANSLATE_CALL)
+            keyword = translate.to_lang(keyword, BASE, mk["lang"], load_glossary(BASE), call=TRANSLATE_CALL)
         except translate.TranslateError as err:
             print(str(err))
             return 2
@@ -332,16 +341,26 @@ def search(cfg: dict, args) -> int:
     must = [w for w in args.must.split("|") if w.strip()] if args.must else model_words(keyword)
     excl = ([w for w in args.exclude.split("|") if w.strip()] if args.exclude
             else list(cats[args.category].get("search_exclude", [])))
+    if args.market != "rakuten" and not args.exclude:
+        excl = []                       # 카테고리 search_exclude 는 일본어 단어 → 다른 언어 사이트엔 안 맞음
     spec = Spec(id="search", name=keyword, category=args.category, keyword=keyword, must_include=must,
-                exclude=excl)
+                exclude=excl, sources=list(mk["sources"] or []))
     query = {"keyword": keyword, "keyword_original": original, "category": args.category,
-             "must_include": must, "exclude": spec.exclude}
+             "market": args.market, "must_include": must, "exclude": spec.exclude}
     markets = list(cfg["markets"])
     out = BASE / "reports" / "search.json"
     run = Runner(cfg, args.demo, args.bundle)
-    print(f"\n[직접 검색] {keyword}  (카테고리: {category_label(cfg, args.category)}"
+    print(f"\n[직접 검색] {keyword}  ({mk['name']}, 카테고리: {category_label(cfg, args.category)}"
           + (f", 필수 단어: {'·'.join(must)}" if must else "") + ")")
-    print(f"소스: {', '.join(run.search_sources() or run.sources) or '없음'}")
+    print(f"소스: {', '.join(spec.sources or run.search_sources() or run.sources) or '없음'}")
+    missing = [n for n in spec.sources if n not in run.sources and not run.demo]
+    if missing:                          # 키 없음 → 검색하지 않고 실패로 기록 (빈 결과를 '상품 없음'으로 오해하지 않게)
+        keys = getattr(REGISTRY.get(missing[0]), "env_keys", ())
+        problem = f"{mk['name']} 검색 불가: " + (f"키 없음 → buyagent/.env 에 {', '.join(keys)} 입력" if keys
+                                                  else f"소스 {', '.join(missing)} 꺼짐 (settings.toml)")
+        write_search(out, problem, query, markets, [], {}, 0)
+        print(f"  ❌ {problem}")
+        return 1
 
     if reason := check_spec(cfg, spec):
         res = Result(spec=spec, blocked_reason=reason)
@@ -480,6 +499,8 @@ def main() -> None:
                     help="시험 실행: 웹훅 알림만 보내지 않음 (가격 조회·history.db·리포트·latest.json 은 평소대로, health.json 은 그대로)")
     ap.add_argument("--search", default=None, metavar="검색어",
                     help="직접 검색: products.csv 에 없어도 최저가·원가·권장가 확인 (→ reports/search.json)")
+    ap.add_argument("--market", default="rakuten", choices=list(SEARCH_MARKETS),
+                    help="--search 할 사이트 (rakuten: 일본어 검색, aliexpress: 영어 검색·키 필요)")
     ap.add_argument("--category", default="", help="--search 의 카테고리 (categories.toml 키, 예: watch)")
     ap.add_argument("--must", default="", help="--search 상품명 필수 단어, 여러 개는 | 로 (기본: 검색어 속 모델명)")
     ap.add_argument("--exclude", default="", help="--search 제외 단어, 여러 개는 | 로 (기본: 카테고리의 search_exclude)")

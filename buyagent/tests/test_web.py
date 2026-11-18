@@ -119,8 +119,9 @@ class WebTest(unittest.TestCase):
 
     # ---- 실행 명령
     def test_job_command(self):
-        cmd = W.job_command("search", ("--evil x", "watch"))
-        self.assertEqual(cmd[1:], ["main.py", "--search=--evil x", "--category=watch"])   # 옵션으로 오인 안 됨
+        cmd = W.job_command("search", ("--evil x", "watch", "rakuten"))
+        self.assertEqual(cmd[1:], ["main.py", "--search=--evil x", "--category=watch",
+                                   "--market=rakuten"])   # 옵션으로 오인 안 됨
         self.assertEqual(W.job_command("run")[1:], ["main.py", "--no-alert"])
 
     def test_search_request_validation(self):
@@ -128,6 +129,22 @@ class WebTest(unittest.TestCase):
         self.assertEqual(W.search_request({"query": "x" * 101, "category": "watch"}, self.tmp)[0], 400)
         self.assertEqual(W.search_request({"query": "x", "category": "cosmetics"}, self.tmp)[0], 400)   # 등록 금지
         self.assertEqual(W.search_request({"query": "x", "category": "nope"}, self.tmp)[0], 400)
+        self.assertEqual(W.search_request({"query": "x", "category": "watch", "market": "taobao"}, self.tmp)[0], 400)
+
+    def test_add_watch_aliexpress_sets_source(self):
+        ali = {**SEARCH, "query": {**SEARCH["query"], "keyword": "Seiko SBTQ043", "market": "aliexpress",
+                                   "exclude": []}}
+        self.assertEqual(W.add_watch(self.tmp, ali)[0], 200)
+        new = self.products()[-1]
+        self.assertEqual((new["keyword"], new["sources"]), ("Seiko SBTQ043", "aliexpress"))
+
+    def test_market_select_rendered(self):
+        (self.tmp / "reports").mkdir(exist_ok=True)
+        q = {**SEARCH, "query": {**SEARCH["query"], "market": "aliexpress"}}
+        (self.tmp / "reports" / "search.json").write_text(json.dumps(q), encoding="utf-8")
+        page = W.render(self.tmp)
+        self.assertIn('<select name="market"', page)
+        self.assertIn('<option value="aliexpress" selected>', page)
 
     # ---- 서버
     def _server(self, fake_cmd=None):

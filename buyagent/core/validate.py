@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import csv
+import os
 from collections import Counter
 from pathlib import Path
 
 from .models import Spec
+from .translate import load_dotenv
 
 ERROR, WARN = "오류", "주의"
 
@@ -45,6 +47,12 @@ def validate(cfg: dict, specs: list[Spec], registry: dict, base: Path) -> list[t
             missing = [k for k in cls.required_keys if not conf.get(k)]
             if missing:
                 warn(f"소스 {name}: 키 미입력({', '.join(missing)}) → settings.local.toml 에 입력")
+            env_keys = getattr(cls, "env_keys", ())
+            if env_keys:
+                load_dotenv(base / ".env")
+                no_env = [k for k in env_keys if not os.environ.get(k, "").strip()]
+                if no_env:
+                    warn(f"소스 {name}: 키 미입력({', '.join(no_env)}) → buyagent/.env 에 입력 (없으면 이 소스는 꺼짐)")
             soft = [k for k in cls.recommended_keys if not conf.get(k)]
             if soft and not missing:
                 warn(f"소스 {name}: {', '.join(soft)} 비어 있음 → 없이 시도함. 거절되면 python main.py --probe 로 확인")

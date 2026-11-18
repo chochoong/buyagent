@@ -6,6 +6,7 @@ catalog/manual_prices.csv 에 products.csv 의 id 별로 가격을 적어 두면
   id,price,currency,origin,shipping,in_stock,shop,url,checked,memo
   akko-5075b,329,CNY,CN,0,Y,Akko 타오바오 공식점,https://...,2026-11-13,
 
+- origin   : CN = 중국 배대지 거침(배대지 요금 더함), CN_DIRECT = 알리처럼 한국까지 직배송(배대지 요금 0)
 - price    : 현지가 (해당 통화)
 - shipping : 현지 배송비. 0 = 배대지까지 무료배송 확인됨. 비우면 "미확인" → 0으로 가정하고 "확인 후 shipping 입력" 알림
 - in_stock : N 이면 품절로 처리 (품절·재입고 알림)

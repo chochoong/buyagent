@@ -162,6 +162,16 @@ class TestRules(unittest.TestCase):
         for name in ["ベビー用 スタイ", "キャンメイク リップ", "ビタミンC サプリ"]:
             self.assertIsNotNone(blocked_category(CFG, name), name)
 
+    def test_shop_promo_words_not_limited(self):
+        """라쿠텐 가게 이벤트 문구(포인트 추첨)·덤 표시는 정상 상품 (2026-11-18 세이코 88건 중 49건 오차단)"""
+        for name in ["＼全品10%OFF+抽選100%還元★11/18限定／ セイコー メカニカル",
+                     "【10％OFFクーポン&抽選で最大10000pt当たる!】【選べるノベルティー付き】セイコー アストロン",
+                     "【ノベルティ付】【無金利ローン可】 セイコー アストロン", "【購入特典】 セイコー", "アルバム 特典付き"]:
+            self.assertIsNone(blocked_category(CFG, name, "watch"), name)
+        for name in ["一番くじ ちいかわ A賞", "ちいかわ 特典 ブロマイド のみ", "非売品 ノベルティ ポーチ",
+                     "キャンペーン 当選品 アクリルスタンド"]:
+            self.assertEqual(blocked_category(CFG, name, "watch"), "limited", name)
+
     def test_glossary_loaded(self):
         self.assertEqual(CFG["glossary_unknown"], [], "기본 설정에 단어장에 없는 한글이 없어야 함")
 
@@ -647,6 +657,26 @@ class TestRakutenWeb(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             src.search(Query("x"))
 
+    def test_new_card_class_dui_item(self):
+        """2026-11 라쿠텐이 카드 class 를 dui-card → dui-item 으로 바꿈 → 둘 다 읽혀야 함"""
+        from sources.rakuten_web import parse_search_html
+        page = self.card(1, 3300) + self.card(2, 900).replace("dui-card searchresultitem", "dui-item searchresultitem")
+        self.assertEqual([i["item_id"] for i in parse_search_html(page)], ["1", "2"])
+
+    def test_real_no_result_page_is_empty_not_error(self):
+        src = REGISTRY["rakuten_web"]({"enabled": True, "min_interval": 0, "retries": 0}, CFG)
+        src.fetch_html = lambda url: "<html>" + "x" * 5000 + "ご指定の検索条件に該当する商品はみつかりませんでした</html>"
+        self.assertEqual(src.search(Query("x")), [])
+
+    def test_unreadable_cards_raise_structure_change(self):
+        """카드 표시는 있는데 하나도 못 읽으면 조용히 0건(가짜 품절)이 아니라 '구조 변경' 오류"""
+        src = REGISTRY["rakuten_web"]({"enabled": True, "min_interval": 0, "retries": 0}, CFG)
+        src.fetch_html = lambda url: ("<html>" + "x" * 5000 + '<li class="new-card searchresultitem">상품</li>' * 3
+                                      + "</html>")
+        with self.assertRaises(RuntimeError) as cm:
+            src.search(Query("x"))
+        self.assertIn("구조 변경", str(cm.exception))
+
     def test_offers(self):
         src = REGISTRY["rakuten_web"]({"enabled": True, "min_interval": 0, "default_shipping": 800}, CFG)
         src.fetch_html = lambda url: self.card(1, 3300, 5170) + self.card(2, 900, free=False)
@@ -863,6 +893,47 @@ class TestLatestJson(TmpDirTest):
         self.assertEqual(self._main("--search", "x"), 2)
         self.assertEqual(M.model_words("セイコー SBTQ041 腕時計 7T92"), ["SBTQ041", "7T92"])
 
+    def _no_ali_keys(self):
+        cls = REGISTRY["aliexpress"]
+        saved = cls.keys
+        cls.keys = lambda self: {k: "" for k in cls.env_keys}
+        self.addCleanup(lambda: setattr(cls, "keys", saved))
+
+    def test_search_market_aliexpress_without_keys(self):
+        self._no_ali_keys()
+        self.assertEqual(self._main("--search", "Seiko SBTQ041", "--category", "watch", "--market", "aliexpress"), 1)
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertFalse(d["ok"])
+        self.assertIn("ALIEXPRESS_APP_KEY", d["error"])            # 키 없음 → '상품 없음'이 아니라 실패
+        self.assertEqual(d["query"]["market"], "aliexpress")
+        self.assertEqual(d["query"]["exclude"], [])                 # 일본어 search_exclude 는 알리에 안 씀
+        self.assertEqual(d["items"], [])
+
+    def test_search_market_default_is_rakuten(self):
+        self.assertEqual(self._main("--demo", "--search", "セイコー SBTQ041", "--category", "watch"), 0)
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertEqual(d["query"]["market"], "rakuten")
+        self.assertIn("ベルト", d["query"]["exclude"])
+
+    def test_search_market_invalid(self):
+        self.assertEqual(self._main("--search", "x", "--category", "watch", "--market", "taobao"), 2)
+
+    def test_search_korean_to_english_for_aliexpress(self):
+        self._no_ali_keys()
+        calls = []
+        saved = M.TRANSLATE_CALL
+        M.TRANSLATE_CALL = lambda q, base: calls.append(q) or "Xiaomi smart glasses"
+        try:
+            self._main("--search", "샤오미 스마트 안경", "--category", "watch", "--market", "aliexpress")
+        finally:
+            M.TRANSLATE_CALL = saved
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertEqual(calls, ["샤오미 스마트 안경"])
+        self.assertEqual((d["query"]["keyword"], d["query"]["keyword_original"]),
+                         ("Xiaomi smart glasses", "샤오미 스마트 안경"))
+        cache = json.loads((self.tmp / "data" / "translate_cache.json").read_text(encoding="utf-8"))
+        self.assertEqual(cache, {"en:샤오미 스마트 안경": "Xiaomi smart glasses"})   # 일본어 캐시와 안 섞임
+
     def test_crash_writes_error(self):
         def boom(*a, **k):
             raise ValueError("문법 오류")
@@ -872,6 +943,104 @@ class TestLatestJson(TmpDirTest):
         self.assertIn("문법 오류", d["error"])
         self.assertEqual(d["items"], [])
 
+
+ALI_OK = {"aliexpress_affiliate_product_query_response": {"resp_result": {"resp_code": 200, "resp_msg": "success",
+    "result": {"current_record_count": 3, "products": {"product": [
+        {"product_id": 1005001, "product_title": "Seiko SBTQ041 Watch", "target_sale_price": "95.50",
+         "target_sale_price_currency": "USD", "target_original_price": "120.00", "shop_name": "Watch Store",
+         "shop_id": 9, "product_detail_url": "https://www.aliexpress.com/item/1005001.html?aff=x"},
+        {"product_id": 1005002, "product_title": "No price", "target_sale_price": "",
+         "target_sale_price_currency": "USD"},
+        {"product_id": 1005003, "product_title": "Other currency", "target_sale_price": "700",
+         "target_sale_price_currency": "CNY"}]}}}}}
+
+
+class TestAliExpress(unittest.TestCase):
+    """키 없이 가짜 응답으로 (실제 API 호출 없음)"""
+
+    def setUp(self):
+        self.cfg = load_config(BASE)
+        self.src = REGISTRY["aliexpress"](self.cfg["sources"]["aliexpress"], self.cfg)
+        self.src.keys = lambda: {"ALIEXPRESS_APP_KEY": "k", "ALIEXPRESS_APP_SECRET": "s",
+                                 "ALIEXPRESS_TRACKING_ID": "t"}
+        self.sent = []
+        self.src.request = lambda p: self.sent.append(p) or copy.deepcopy(ALI_OK)
+
+    def test_search_to_offers(self):
+        from sources.aliexpress import sign
+        offers = self.src.search(Query("Seiko SBTQ041"))
+        self.assertEqual([o.key for o in offers], ["ali:1005001"])      # 가격 없음·다른 통화는 뺌
+        o = offers[0]
+        self.assertEqual((o.price, o.currency, o.origin, o.shop), (95.5, "USD", "CN_DIRECT", "Watch Store"))
+        self.assertEqual(o.url, "https://www.aliexpress.com/item/1005001.html")   # 제휴 추적 파라미터 제거
+        self.assertFalse(o.shipping_known)
+        p = self.sent[0]
+        self.assertEqual((p["method"], p["keywords"], p["ship_to_country"], p["tracking_id"]),
+                         ("aliexpress.affiliate.product.query", "Seiko SBTQ041", "KR", "t"))
+        self.assertEqual(p["sign"], sign({k: v for k, v in p.items() if k != "sign"}, "s"))
+
+    def test_sign_known_value(self):
+        import hashlib
+        import hmac
+        from sources.aliexpress import sign
+        want = hmac.new(b"sec", b"a1b2methodx", hashlib.sha256).hexdigest().upper()
+        self.assertEqual(sign({"method": "x", "b": "2", "a": "1", "sign": "old"}, "sec"), want)  # 이름순, sign 제외
+
+    def test_errors_are_not_silent_zero(self):
+        from sources.aliexpress import parse_products
+        for bad in ({"error_response": {"code": "IncompleteSignature", "msg": "bad sign"}},
+                    {"code": "IllegalAccessToken", "message": "x"},
+                    {"aliexpress_affiliate_product_query_response": {"resp_result": {"resp_code": 402,
+                                                                                     "resp_msg": "bad"}}},
+                    []):
+            with self.assertRaises(RuntimeError, msg=str(bad)):
+                parse_products(bad)
+        empty = {"aliexpress_affiliate_product_query_response": {"resp_result": {"resp_code": 405}}}
+        self.assertEqual(parse_products(empty), [])
+
+    def test_explicit_only_and_pricing_without_forwarder(self):
+        from core.fx import FX
+        from core.pricing import price_offer
+        self.assertTrue(REGISTRY["aliexpress"].explicit_only)       # 일반 감시(일본어 검색어)에는 안 쓰임
+        offer = self.src.search(Query("Seiko SBTQ041"))[0]
+        fx = FX(self.cfg, True)
+        r = Result(spec=Spec(id="x", name="x", category="watch", keyword="x"))
+        price_offer(self.cfg, fx, r, offer)
+        c = self.cfg["costs"]
+        goods = fx.to_krw(offer.total, "USD") * (1 + c["card_fx_fee_rate"])
+        # 배대지 요금 0 (직배송) → 원가 = 물품(+카드 수수료) + 포장 + 관부가세(면세 이하면 0)
+        self.assertEqual(r.cost_krw, int(round(goods + c["domestic_shipping_krw"] + c["packaging_krw"]
+                                               + r.est_duty_krw)))
+        self.assertTrue(any("현지 배송비 미확인" in a for a in r.alerts))
+
+    def test_validate_warns_missing_env_keys(self):
+        import os
+        cls = REGISTRY["aliexpress"]
+        saved = {k: os.environ.pop(k, None) for k in cls.env_keys}
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            issues = validate(self.cfg, [], REGISTRY, tmp)        # 임시 폴더 = .env 없음
+            self.assertTrue(any("ALIEXPRESS_APP_KEY" in m for _, m in issues))
+            self.assertFalse(any(lv == ERROR and "CN_DIRECT" in m for lv, m in issues))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+
+    def test_translate_english(self):
+        from core import translate as T
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            self.assertEqual(T.to_lang("쿠션 S", tmp, "en", {"쿠션": ["クッション"]}, call=lambda q, b: "Cushion S"),
+                             "Cushion S")                                   # 일본어 단어장은 en 에 안 씀
+            with self.assertRaises(T.TranslateError) as cm:
+                T.to_lang("새 단어", tmp, "en", call=lambda q, b: "セイコー watch")   # 영어 아닌 글자 → 실패
+            self.assertIn("영어로 직접 입력", str(cm.exception))
+            with self.assertRaises(ValueError):
+                T.to_lang("새", tmp, "zh")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 if __name__ == "__main__":
     unittest.main()

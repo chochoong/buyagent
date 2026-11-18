@@ -46,6 +46,9 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 MAX_QUERY = 100
 JOB_TIMEOUT = {"search": 5 * 60, "run": 30 * 60}     # 초
+# 직접 검색 사이트 (main.py SEARCH_MARKETS 와 같은 값) → 감시 추가 때 products.csv sources 칸
+SEARCH_MARKETS = {"rakuten": "라쿠텐(일본)", "aliexpress": "알리익스프레스(중국)"}
+MARKET_SOURCES = {"rakuten": "", "aliexpress": "aliexpress"}
 PRODUCT_COLS = ["id", "name", "category", "keyword", "jan", "must_include", "exclude", "trusted_shops", "sources",
                 "shipping_profile", "bundle_size", "my_price_coupang", "my_price_naver", "active", "memo",
                 "hub_product_id"]
@@ -143,6 +146,7 @@ def add_watch(base: Path, search: dict, name: str = "") -> tuple[int, dict]:
         rows.append({
             "id": pid, "name": (name or keyword).strip()[:100], "category": cat, "keyword": keyword,
             "must_include": "|".join(q.get("must_include") or []), "exclude": "|".join(q.get("exclude") or []),
+            "sources": MARKET_SOURCES.get(q.get("market") or "rakuten", ""),
             "my_price_coupang": "0", "my_price_naver": "0", "active": "Y",
             "memo": f"{FROM_SEARCH} {date.today().isoformat()}",
         })
@@ -168,8 +172,9 @@ def toggle_watch(base: Path, pid: str) -> tuple[int, dict]:
 # ---------------------------------------------------------------- 작업 실행 (main.py)
 def job_command(kind: str, arg: tuple = ()) -> list[str]:
     if kind == "search":
-        q, cat = arg
-        return [sys.executable, "main.py", f"--search={q}", f"--category={cat}"]   # --옵션=값: 검색어가 옵션으로 오인 안 됨
+        q, cat, market = arg
+        return [sys.executable, "main.py", f"--search={q}", f"--category={cat}",
+                f"--market={market}"]   # --옵션=값: 검색어가 옵션으로 오인 안 됨
     if kind == "run":
         return [sys.executable, "main.py", "--no-alert"]
     raise ValueError(kind)
@@ -215,6 +220,9 @@ def job_view(j: dict) -> dict:
 def search_request(body: dict, base: Path = BASE) -> tuple[int, dict]:
     q = " ".join(str(body.get("query") or "").split())
     cat = str(body.get("category") or "")
+    market = str(body.get("market") or "rakuten")
+    if market not in SEARCH_MARKETS:
+        return 400, {"error": f"사이트는 {' / '.join(SEARCH_MARKETS)} 중 하나입니다."}
     if not q:
         return 400, {"error": "검색어를 입력해 주세요. (일본 쇼핑몰 검색어, 예: セイコー SBTQ041)"}
     if len(q) > MAX_QUERY:
@@ -222,7 +230,8 @@ def search_request(body: dict, base: Path = BASE) -> tuple[int, dict]:
     cats = categories(base)
     if not cats.get(cat, {}).get("allowed"):
         return 400, {"error": "판매 가능한 카테고리를 골라 주세요."}
-    return start_job("search", (q, cat), f"검색: {q} ({cats[cat].get('name', cat)})", base)
+    return start_job("search", (q, cat, market),
+                     f"검색: {q} ({SEARCH_MARKETS[market]} · {cats[cat].get('name', cat)})", base)
 
 
 # ---------------------------------------------------------------- 화면
@@ -291,12 +300,15 @@ def render(base: Path = BASE) -> str:
     last = (search or {}).get("query") or {}
     opts = "".join(f'<option value="{e(k)}"{" selected" if k == (last.get("category") or "watch") else ""}>'
                    f'{e(v.get("name", k))}</option>' for k, v in cats.items() if v.get("allowed"))
+    m_opts = "".join(f'<option value="{e(k)}"{" selected" if k == (last.get("market") or "rakuten") else ""}>'
+                     f'{e(v)}</option>' for k, v in SEARCH_MARKETS.items())
     form = (f'<form id="search" class="row"><input name="query" required maxlength="{MAX_QUERY}" '
-            f'placeholder="검색어 (예: セイコー SBTQ041 · 한글은 일본어로 자동 번역)" '
+            f'placeholder="검색어 (예: セイコー SBTQ041 · 한글은 사이트 언어로 자동 번역)" '
             f'value="{e(last.get("keyword_original") or last.get("keyword") or "")}">'
+            f'<select name="market" title="검색할 사이트 (한글은 그 사이트 언어로 번역)">{m_opts}</select>'
             f'<select name="category" title="관세율·마진 기준·차단 규칙이 카테고리마다 다름">{opts}</select>'
             f'<button type="submit">🔎 검색</button></form>'
-            '<p class="small muted">라쿠텐에서 찾아 개당 원가가 낮은 순으로 보여 줘요 (30초~1분). 한글은 일본어로 자동 번역해요(ANTHROPIC_API_KEY 필요). 모델명(예: SBTQ041)을 넣으면 '
+            '<p class="small muted">고른 사이트에서 찾아 개당 원가가 낮은 순으로 보여 줘요 (30초~1분). 한글은 라쿠텐=일본어, 알리=영어로 자동 번역해요(ANTHROPIC_API_KEY 필요). 알리는 제휴 API 키가 있어야 해요. 모델명(예: SBTQ041)을 넣으면 '
             '그 단어가 들어간 상품만 남겨 시계줄 같은 부속품을 걸러요. 감시 목록·가격 이력·알림에는 영향 없어요.</p>')
     if s_err:
         sbody = f'<p class="bad">{e(s_err)}</p>'
@@ -406,7 +418,7 @@ function poll() {
 document.getElementById("search").addEventListener("submit", function (ev) {
   ev.preventDefault();
   var f = new FormData(ev.target);
-  api("/api/search", {query: f.get("query"), category: f.get("category")}).then(poll).catch(function (err) { alert(err.message); });
+  api("/api/search", {query: f.get("query"), category: f.get("category"), market: f.get("market")}).then(poll).catch(function (err) { alert(err.message); });
 });
 document.addEventListener("click", function (ev) {
   var b = ev.target.closest("button[data-act]");
