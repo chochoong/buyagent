@@ -37,6 +37,20 @@ def forwarding_fee(cfg: dict, origin: str, profile: str) -> float:
     return float(table[profile])
 
 
+def small_hint(cfg: dict, res: Result, offer: Offer, profile: str, fwd: float, bundle: int) -> None:
+    """상품명·설명에 우편함 배송(メール便 등) 표시가 있는데 small 보다 큰 요금으로 계산했으면 알려 줌 (값은 안 바꿈)"""
+    words = cfg.get("shipping_hints", {}).get(offer.origin, {}).get("small_keywords", [])
+    small = cfg["shipping_profiles"].get(offer.origin, {}).get("small")
+    if not words or small is None or profile == "small" or fwd <= small:
+        return
+    text = f"{offer.name} {offer.text}"
+    hit = next((w for w in words if w in text), "")
+    if hit:
+        cost = int(round(res.cost_krw - (fwd - small) / bundle))
+        res.alerts.append(f"'{hit}' 표시 → 소형 배송일 수 있음. small 이면 원가 약 {cost:,}원 "
+                          f"(products.csv shipping_profile 칸에 small)")
+
+
 def price_offer(cfg: dict, fx: FX, res: Result, offer: Offer, bundle_default: int = 0) -> None:
     c, cu = cfg["costs"], cfg["customs"]
     spec = res.spec
@@ -87,6 +101,8 @@ def price_offer(cfg: dict, fx: FX, res: Result, offer: Offer, bundle_default: in
                 res.alerts.append(f"{m['name']} 현재가 {mp:,}원 → 마진 {q.my_margin:,}원 (기준 미달). "
                                   f"권장가 {rec:,}원")
         res.quotes.append(q)
+
+    small_hint(cfg, res, offer, profile, fwd, bundle)
 
     mult_limit = pr.get("max_price_multiple")
     if mult_limit and res.quotes and offer.price > 0:

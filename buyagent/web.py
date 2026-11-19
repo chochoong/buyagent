@@ -230,7 +230,7 @@ def search_request(body: dict, base: Path = BASE) -> tuple[int, dict]:
         return 400, {"error": f"검색어는 {MAX_QUERY}자 이내로 입력해 주세요."}
     cats = categories(base)
     if not cats.get(cat, {}).get("allowed"):
-        return 400, {"error": "판매 가능한 카테고리를 골라 주세요."}
+        return 400, {"error": "카테고리를 골라 주세요. 카테고리마다 배송비·마진 기준이 달라 원가와 권장가가 바뀝니다."}
     return start_job("search", (q, cat, market),
                      f"검색: {q} ({SEARCH_MARKETS[market]} · {cats[cat].get('name', cat)})", base)
 
@@ -299,15 +299,16 @@ def render(base: Path = BASE) -> str:
 
     # --- 직접 검색
     last = (search or {}).get("query") or {}
-    opts = "".join(f'<option value="{e(k)}"{" selected" if k == (last.get("category") or "watch") else ""}>'
-                   f'{e(v.get("name", k))}</option>' for k, v in cats.items() if v.get("allowed"))
+    # 카테고리는 매번 직접 고름 (기본값·지난 검색값을 미리 골라 두면 노트가 '시계' 기준 배송비·마진으로 계산되는 일이 생김)
+    opts = '<option value="" selected disabled>카테고리 선택</option>' + "".join(
+        f'<option value="{e(k)}">{e(v.get("name", k))}</option>' for k, v in cats.items() if v.get("allowed"))
     m_opts = "".join(f'<option value="{e(k)}"{" selected" if k == (last.get("market") or "rakuten") else ""}>'
                      f'{e(v)}</option>' for k, v in SEARCH_MARKETS.items())
     form = (f'<form id="search" class="row"><input name="query" required maxlength="{MAX_QUERY}" '
             f'placeholder="검색어 (예: セイコー SBTQ041 · 한글은 사이트 언어로 자동 번역)" '
             f'value="{e(last.get("keyword_original") or last.get("keyword") or "")}">'
             f'<select name="market" title="검색할 사이트 (한글은 그 사이트 언어로 번역)">{m_opts}</select>'
-            f'<select name="category" title="관세율·마진 기준·차단 규칙이 카테고리마다 다름">{opts}</select>'
+            f'<select name="category" required title="배송비·관세율·마진 기준·차단 규칙이 카테고리마다 다름">{opts}</select>'
             f'<button type="submit">🔎 검색</button></form>'
             '<p class="small muted">고른 사이트에서 찾아 개당 원가가 낮은 순으로 보여 줘요 (30초~1분). 한글은 라쿠텐=일본어, 알리·이베이=영어로 자동 번역해요(ANTHROPIC_API_KEY 필요). 알리·이베이는 API 키가 있어야 해요. 모델명(예: SBTQ041)을 넣으면 '
             '그 단어가 들어간 상품만 남겨 시계줄 같은 부속품을 걸러요. 감시 목록·가격 이력·알림에는 영향 없어요.</p>')

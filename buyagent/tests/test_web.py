@@ -129,6 +129,14 @@ class WebTest(unittest.TestCase):
         self.assertEqual(W.search_request({"query": "x" * 101, "category": "watch"}, self.tmp)[0], 400)
         self.assertEqual(W.search_request({"query": "x", "category": "cosmetics"}, self.tmp)[0], 400)   # 등록 금지
         self.assertEqual(W.search_request({"query": "x", "category": "nope"}, self.tmp)[0], 400)
+        self.assertEqual(W.search_request({"query": "x"}, self.tmp)[0], 400)                     # 카테고리 안 고름
+
+    def test_category_not_preselected(self):
+        page = W.render(self.tmp)       # 지난 검색(시계)이 있어도 카테고리는 미리 골라 두지 않음
+        sel = page.split('<select name="category"')[1].split("</select>")[0]
+        self.assertIn('<option value="" selected disabled>카테고리 선택</option>', sel)
+        self.assertEqual(sel.count("selected"), 1)
+        self.assertIn(" required", sel.split(">")[0])
         self.assertEqual(W.search_request({"query": "x", "category": "watch", "market": "taobao"}, self.tmp)[0], 400)
 
     def test_add_watch_aliexpress_sets_source(self):

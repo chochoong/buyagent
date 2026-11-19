@@ -118,6 +118,25 @@ class TestPricing(TmpDirTest):
         only = self.run.cheapest(self.spec, [eur])
         self.assertTrue(any("계산 불가" in a for a in only.alerts))
 
+    def test_small_shipping_hint(self):
+        from core.fx import FX
+        from core.pricing import price_offer
+        c = cfg()
+
+        def calc(name, category="watch", origin="JP"):
+            r = Result(spec=Spec(id="x", name="x", category=category, keyword="x"))
+            price_offer(c, FX(c, True), r, Offer("demo", "k", name, 851, "JPY", origin, text=name))
+            return r
+        r = calc("ちいかわ 鍵付きノート [M便 1/1]")                 # 시계(medium)로 계산 → 알림
+        hint = [a for a in r.alerts if "소형 배송일 수 있음" in a]
+        self.assertEqual(len(hint), 1)
+        self.assertIn("'M便'", hint[0])
+        small = c["shipping_profiles"]["JP"]["medium"] - c["shipping_profiles"]["JP"]["small"]
+        self.assertIn(f"{r.cost_krw - small:,}원", hint[0])
+        self.assertEqual(r.cost_krw, calc("ちいかわ ノート").cost_krw)    # 계산값은 안 바꿈
+        self.assertFalse(any("소형" in a for a in calc("ちいかわ ノート").alerts))
+        self.assertFalse(any("소형" in a for a in calc("ノート メール便", "stationery").alerts))   # 이미 small
+
 
 # ---------------------------------------------------------------- 이력·알림
 class TestStore(TmpDirTest):
