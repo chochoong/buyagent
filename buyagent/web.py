@@ -161,6 +161,33 @@ def schedule_status() -> dict:
     return {"registered": True, "next": row[1] if len(row) > 1 else ""}
 
 
+def schtasks_run(args: list[str]) -> subprocess.CompletedProcess:
+    """작업 스케줄러 명령 실행 (테스트에서 가짜로 바꿈)"""
+    return subprocess.run(["schtasks", *args], capture_output=True, timeout=15)
+
+
+def schedule_request(body: dict, base: Path = BASE) -> tuple[int, dict]:
+    """화면 버튼 → 매시간 자동 실행 등록/해제 (schedule.bat 과 같은 명령, 사용자가 누를 때만)"""
+    on = body.get("on")
+    if not isinstance(on, bool):
+        return 400, {"error": "on 값(true/false)이 필요합니다."}
+    if os.name != "nt":
+        return 400, {"error": "Windows 작업 스케줄러에서만 쓸 수 있어요."}
+    run_bat = (base / "run.bat").resolve()
+    if on and not run_bat.exists():
+        return 400, {"error": f"{run_bat} 이 없습니다."}
+    args = (["/Create", "/SC", "HOURLY", "/TN", TASK_NAME, "/TR", f'"{run_bat}"', "/F"] if on
+            else ["/Delete", "/TN", TASK_NAME, "/F"])
+    try:
+        p = schtasks_run(args)
+    except (OSError, subprocess.SubprocessError) as err:
+        return 500, {"error": f"작업 스케줄러 실행 실패: {err}"}
+    if p.returncode != 0:
+        msg = (p.stderr or p.stdout or b"").decode("cp949", errors="replace").strip()
+        return 500, {"error": f"작업 스케줄러 {'등록' if on else '해제'} 실패: {msg or p.returncode}"}
+    return 200, {"on": on}
+
+
 def watch_status(base: Path, latest: dict | None) -> str:
     """감시 상품 위: 자동 실행 주기·마지막 감시·전체 멈춤 버튼"""
     since = paused_since(base)
@@ -170,7 +197,7 @@ def watch_status(base: Path, latest: dict | None) -> str:
         sched = f"자동 실행: <b>매시간</b> (작업 스케줄러 '{TASK_NAME}'{nxt})"
     else:
         sched = ('자동 실행: <span class="warn">등록 안 됨</span> → 정기 감시·디스코드 알림을 받으려면 '
-                 '<code>schedule.bat</code> 을 더블클릭하세요')
+                 '오른쪽 [매시간 자동 실행 켜기]를 누르세요')
     last = (latest or {}).get("run_at") or ""
     last_txt = f' · 마지막 감시 {e(last[:16].replace("T", " "))}' + (" (예시 데이터)" if (latest or {}).get("demo") else "") if last else " · 감시 실행 기록 없음"
     if since:
@@ -179,7 +206,9 @@ def watch_status(base: Path, latest: dict | None) -> str:
     else:
         state = '<span class="ok">● 감시 중</span>'
         btn = '<button class="sm" data-act="pause" data-paused="1">⏸ 감시 전체 멈춤</button>'
-    return f'<div class="row between small"><span>{state} · {sched}{last_txt}</span>{btn}</div>'
+    sbtn = ('<button class="sm" data-act="schedule" data-on="0">자동 실행 끄기 (등록 해제)</button>' if st["registered"]
+            else '<button class="sm" data-act="schedule" data-on="1">⏱ 매시간 자동 실행 켜기</button>')
+    return f'<div class="row between small"><span>{state} · {sched}{last_txt}</span><span class="row">{sbtn}{btn}</span></div>'
 
 
 def pause_request(body: dict, base: Path = BASE) -> tuple[int, dict]:
@@ -589,6 +618,11 @@ document.addEventListener("click", function (ev) {
     if (must === null) return;
     if (!must.trim() && !confirm("꼭 들어갈 단어 없이 추가할까요? (캐릭터 상품처럼 모델명이 없는 경우만 권장)")) return;
     api("/api/add", {name: name, must: must}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
+  } else if (b.dataset.act === "schedule") {
+    var add = b.dataset.on === "1";
+    if (!confirm(add ? "Windows 작업 스케줄러에 'buyagent'를 등록해 매시간 감시를 실행할까요?\\n켜진 상품을 조회하고, 변화가 있을 때만 디스코드로 알림을 보내요. (PC가 켜져 있을 때만 실행)"
+                     : "매시간 자동 실행을 끌까요? 작업 스케줄러에서 'buyagent'를 지워요.")) return;
+    api("/api/schedule", {on: add}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
   } else if (b.dataset.act === "pause") {
     var on = b.dataset.paused === "1";
     if (!confirm(on ? "감시를 전체 멈출까요? 정기 실행이 와도 상품 조회·디스코드 알림을 하지 않아요. (상품별 켜짐/꺼짐은 그대로)"
@@ -676,6 +710,8 @@ class Handler(BaseHTTPRequestHandler):
             code, out = add_watch(self.base, read_json(self.base / "reports" / "search.json")[0] or {},
                                   str(body.get("name") or ""),
                                   None if body.get("must") is None else str(body.get("must")))
+        elif path == "/api/schedule":
+            code, out = schedule_request(body, self.base)
         elif path == "/api/pause":
             code, out = pause_request(body, self.base)
         elif path == "/api/rates":

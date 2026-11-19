@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -180,6 +181,28 @@ class WebTest(unittest.TestCase):
         self.assertIn("매시간", W.render(self.tmp))
         self.assertEqual(W.pause_request({"paused": False}, self.tmp)[0], 200)
         self.assertNotIn("감시 전체 멈춤 중", W.render(self.tmp))
+
+    def test_schedule_button(self):
+        calls = []
+        saved = (W.schtasks_run, W.schedule_status, W.os.name)
+        W.schtasks_run = lambda args: calls.append(args) or type("P", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+        W.schedule_status = lambda: {"registered": False, "next": ""}
+        self.addCleanup(lambda: (setattr(W, "schtasks_run", saved[0]), setattr(W, "schedule_status", saved[1])))
+        (self.tmp / "run.bat").write_text("@echo off", encoding="utf-8")
+        self.assertIn('data-act="schedule" data-on="1"', W.render(self.tmp))
+        self.assertEqual(W.schedule_request({"on": "1"}, self.tmp)[0], 400)
+        if os.name == "nt":
+            self.assertEqual(W.schedule_request({"on": True}, self.tmp), (200, {"on": True}))
+            self.assertEqual(calls[0][:5], ["/Create", "/SC", "HOURLY", "/TN", "buyagent"])
+            self.assertIn("run.bat", calls[0][6])
+            self.assertEqual(W.schedule_request({"on": False}, self.tmp)[0], 200)
+            self.assertEqual(calls[1], ["/Delete", "/TN", "buyagent", "/F"])
+            W.schtasks_run = lambda args: type("P", (), {"returncode": 1, "stdout": b"", "stderr": "액세스 거부".encode("cp949")})()
+            code, out = W.schedule_request({"on": True}, self.tmp)
+            self.assertEqual(code, 500)
+            self.assertIn("액세스 거부", out["error"])
+        W.schedule_status = lambda: {"registered": True, "next": ""}
+        self.assertIn('data-on="0"', W.render(self.tmp))
 
     def test_cost_cell_shows_forwarding(self):
         it = {"cost_krw": 183117, "forwarding_krw": 15000, "shipping_profile": "medium",
