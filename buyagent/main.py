@@ -311,6 +311,7 @@ TRANSLATE_CALL = None       # 테스트에서 가짜 번역 함수로 바꿈 (No
 SEARCH_MARKETS = {
     "rakuten": {"name": "라쿠텐(일본)", "lang": "ja", "sources": None},
     "aliexpress": {"name": "알리익스프레스(중국)", "lang": "en", "sources": ["aliexpress"]},
+    "ebay": {"name": "이베이(미국)", "lang": "en", "sources": ["ebay"]},
 }
 
 
@@ -500,7 +501,7 @@ def main() -> None:
     ap.add_argument("--search", default=None, metavar="검색어",
                     help="직접 검색: products.csv 에 없어도 최저가·원가·권장가 확인 (→ reports/search.json)")
     ap.add_argument("--market", default="rakuten", choices=list(SEARCH_MARKETS),
-                    help="--search 할 사이트 (rakuten: 일본어 검색, aliexpress: 영어 검색·키 필요)")
+                    help="--search 할 사이트 (rakuten: 일본어 검색, aliexpress·ebay: 영어 검색·키 필요)")
     ap.add_argument("--category", default="", help="--search 의 카테고리 (categories.toml 키, 예: watch)")
     ap.add_argument("--must", default="", help="--search 상품명 필수 단어, 여러 개는 | 로 (기본: 검색어 속 모델명)")
     ap.add_argument("--exclude", default="", help="--search 제외 단어, 여러 개는 | 로 (기본: 카테고리의 search_exclude)")

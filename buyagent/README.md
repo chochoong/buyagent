@@ -51,6 +51,7 @@ python main.py --probe           # API 키 확인: 쇼핑몰마다 검색 1번 (
 python main.py --test-alert      # 웹훅으로 테스트 메시지 보내기
 python main.py --search "セイコー SBTQ041" --category watch   # 직접 검색: 등록 없이 최저가·원가·권장가 (→ reports/search.json, 대시보드 '직접 검색')
 python main.py --search "Seiko SBTQ041" --category watch --market aliexpress   # 알리에서 직접 검색 (--market 기본값 rakuten)
+python main.py --search "Seiko SBTQ041" --category watch --market ebay         # 이베이(미국, 새 상품만)
 python main.py --no-alert        # 시험 실행: 웹훅 알림만 안 보냄 (조회·history.db·리포트·latest.json 은 평소대로)
 python -m unittest               # 코드 고친 뒤 기존 기능이 그대로인지 확인
 ```
@@ -66,7 +67,7 @@ python web.py        # 또는 web.bat 더블클릭 → http://127.0.0.1:8766 (�
 trade_hub 없이도 buyagent 혼자 쓰는 작업 화면이에요. 계산은 모두 `main.py`가 하고, 화면은 실행하고 결과 파일을 보여 줄 뿐이에요.
 
 - **직접 검색:** 검색어 + 카테고리 → 최저가·원가·권장가 (원가 낮은 순). 감시·알림에는 영향 없음
-- **사이트 선택(`--market`):** `rakuten`(기본, 한글은 일본어로 번역) / `aliexpress`(한글은 영어로 번역). 알리는 공식 제휴 API라 키 3개(`ALIEXPRESS_APP_KEY`·`ALIEXPRESS_APP_SECRET`·`ALIEXPRESS_TRACKING_ID`)를 `buyagent/.env`에 넣어야 동작해요. 키가 없으면 "키 없음" 실패로 기록돼요. 알리는 한국 직배송 기준(`CN_DIRECT`, 배대지 요금 0)으로 원가를 계산해요. 타오바오·1688은 공식 API를 개인이 쓸 수 없고 봇 차단 우회가 필요해서 넣지 않아요(수동 가격으로 입력).
+- **사이트 선택(`--market`):** `rakuten`(기본, 한글은 일본어로 번역) / `aliexpress`(한글은 영어로 번역). 알리는 공식 제휴 API라 키 3개(`ALIEXPRESS_APP_KEY`·`ALIEXPRESS_APP_SECRET`·`ALIEXPRESS_TRACKING_ID`)를 `buyagent/.env`에 넣어야 동작해요. 키가 없으면 "키 없음" 실패로 기록돼요. 알리는 한국 직배송 기준(`CN_DIRECT`, 배대지 요금 0)으로 원가를 계산해요. `ebay`(한글은 영어로 번역)는 공식 Browse API로 새 상품·즉시 구매·미국 판매자만 찾고, 미국 배대지 기준(`US`)으로 원가를 계산해요. 키 2개(`EBAY_CLIENT_ID`·`EBAY_CLIENT_SECRET`, eBay Developers Program 무료)를 `.env`에 넣어야 해요. 아마존은 상품 API가 판매 실적 조건으로 바뀌어 넣지 않았어요. 타오바오·1688은 공식 API를 개인이 쓸 수 없고 봇 차단 우회가 필요해서 넣지 않아요(수동 가격으로 입력).
 - **이 검색을 감시에 추가:** 방금 검색한 조건(검색어·필수 단어·제외 단어)을 `products.csv`에 한 줄 추가 → 다음 감시부터 매시간 추적
 - **감시 켜기/끄기**, **감시 시험 실행**(`--no-alert`: 웹훅만 안 보냄)
 - 최근 감시 결과, 감시 상품, 수동 가격 보기

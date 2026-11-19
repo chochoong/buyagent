@@ -47,8 +47,9 @@ DEFAULT_PORT = 8766
 MAX_QUERY = 100
 JOB_TIMEOUT = {"search": 5 * 60, "run": 30 * 60}     # 초
 # 직접 검색 사이트 (main.py SEARCH_MARKETS 와 같은 값) → 감시 추가 때 products.csv sources 칸
-SEARCH_MARKETS = {"rakuten": "라쿠텐(일본)", "aliexpress": "알리익스프레스(중국)"}
-MARKET_SOURCES = {"rakuten": "", "aliexpress": "aliexpress"}
+SEARCH_MARKETS = {"rakuten": "라쿠텐(일본·일본어로 검색)", "aliexpress": "알리익스프레스(중국·영어로 검색)",
+                  "ebay": "이베이(미국·영어로 검색)"}
+MARKET_SOURCES = {"rakuten": "", "aliexpress": "aliexpress", "ebay": "ebay"}
 PRODUCT_COLS = ["id", "name", "category", "keyword", "jan", "must_include", "exclude", "trusted_shops", "sources",
                 "shipping_profile", "bundle_size", "my_price_coupang", "my_price_naver", "active", "memo",
                 "hub_product_id"]
@@ -308,7 +309,7 @@ def render(base: Path = BASE) -> str:
             f'<select name="market" title="검색할 사이트 (한글은 그 사이트 언어로 번역)">{m_opts}</select>'
             f'<select name="category" title="관세율·마진 기준·차단 규칙이 카테고리마다 다름">{opts}</select>'
             f'<button type="submit">🔎 검색</button></form>'
-            '<p class="small muted">고른 사이트에서 찾아 개당 원가가 낮은 순으로 보여 줘요 (30초~1분). 한글은 라쿠텐=일본어, 알리=영어로 자동 번역해요(ANTHROPIC_API_KEY 필요). 알리는 제휴 API 키가 있어야 해요. 모델명(예: SBTQ041)을 넣으면 '
+            '<p class="small muted">고른 사이트에서 찾아 개당 원가가 낮은 순으로 보여 줘요 (30초~1분). 한글은 라쿠텐=일본어, 알리·이베이=영어로 자동 번역해요(ANTHROPIC_API_KEY 필요). 알리·이베이는 API 키가 있어야 해요. 모델명(예: SBTQ041)을 넣으면 '
             '그 단어가 들어간 상품만 남겨 시계줄 같은 부속품을 걸러요. 감시 목록·가격 이력·알림에는 영향 없어요.</p>')
     if s_err:
         sbody = f'<p class="bad">{e(s_err)}</p>'

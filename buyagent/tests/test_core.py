@@ -915,6 +915,16 @@ class TestLatestJson(TmpDirTest):
         self.assertEqual(d["query"]["market"], "rakuten")
         self.assertIn("ベルト", d["query"]["exclude"])
 
+    def test_search_market_ebay_without_keys(self):
+        cls = REGISTRY["ebay"]
+        saved = cls.keys
+        cls.keys = lambda self: {k: "" for k in cls.env_keys}
+        self.addCleanup(lambda: setattr(cls, "keys", saved))
+        self.assertEqual(self._main("--search", "Seiko SBTQ041", "--category", "watch", "--market", "ebay"), 1)
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertIn("EBAY_CLIENT_ID", d["error"])
+        self.assertEqual(d["query"]["market"], "ebay")
+
     def test_search_market_invalid(self):
         self.assertEqual(self._main("--search", "x", "--category", "watch", "--market", "taobao"), 2)
 
@@ -1041,6 +1051,89 @@ class TestAliExpress(unittest.TestCase):
                 T.to_lang("새", tmp, "zh")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+EBAY_OK = {"total": 3, "itemSummaries": [
+    {"itemId": "v1|111|0", "title": "Seiko SBTQ041 Watch", "price": {"value": "120.00", "currency": "USD"},
+     "condition": "New", "seller": {"username": "watchshop", "feedbackPercentage": "99.5"},
+     "shippingOptions": [{"shippingCostType": "FIXED", "shippingCost": {"value": "8.50", "currency": "USD"}}],
+     "itemWebUrl": "https://www.ebay.com/itm/111?hash=x"},
+    {"itemId": "v1|222|0", "title": "Seiko free ship", "price": {"value": "99.99", "currency": "USD"},
+     "seller": {"username": "lowrep", "feedbackPercentage": "91.0"},
+     "shippingOptions": [{"shippingCostType": "FIXED", "shippingCost": {"value": "0.00", "currency": "USD"}}],
+     "itemWebUrl": "https://www.ebay.com/itm/222"},
+    {"itemId": "v1|333|0", "title": "No shipping info", "price": {"value": "50", "currency": "USD"},
+     "itemWebUrl": "https://www.ebay.com/itm/333"}]}
+
+
+class TestEbay(unittest.TestCase):
+    """키 없이 가짜 응답으로 (실제 API 호출 없음)"""
+
+    def setUp(self):
+        from sources.ebay import Ebay
+        Ebay._token = ("", 0.0)
+        self.addCleanup(lambda: setattr(Ebay, "_token", ("", 0.0)))
+        self.cfg = load_config(BASE)
+        self.make()
+
+    def make(self, **conf):
+        self.src = REGISTRY["ebay"]({**self.cfg["sources"]["ebay"], **conf}, self.cfg)
+        self.src.keys = lambda: {"EBAY_CLIENT_ID": "id", "EBAY_CLIENT_SECRET": "sec"}
+        self.tokens, self.sent = [], []
+        self.src.token_request = lambda i, s: self.tokens.append((i, s)) or {"access_token": "TOK", "expires_in": 7200}
+        self.src.request = lambda p, h: self.sent.append((p, h)) or copy.deepcopy(EBAY_OK)
+
+    def test_search_to_offers(self):
+        offers = self.src.search(Query("Seiko SBTQ041"))
+        self.assertEqual([o.key for o in offers], ["ebay:v1|111|0", "ebay:v1|222|0", "ebay:v1|333|0"])
+        a, b, c = offers
+        self.assertEqual((a.price, a.currency, a.origin, a.shop, a.url),
+                         (120.0, "USD", "US", "watchshop", "https://www.ebay.com/itm/111"))
+        self.assertEqual((a.shipping, a.shipping_known), (8.5, False))    # 배대지 우편번호 없음 → 미확인
+        self.assertEqual((b.shipping, b.shipping_known), (0.0, True))     # 무료배송은 확인됨
+        self.assertTrue(any("판매자 평가 91.0%" in n for n in b.notes))
+        self.assertEqual((c.shipping, c.shipping_known), (10.0, False))   # 정보 없음 → default_shipping
+        params, headers = self.sent[0]
+        self.assertEqual(params["q"], "Seiko SBTQ041")
+        for f in ("conditions:{NEW}", "buyingOptions:{FIXED_PRICE}", "itemLocationCountry:US"):
+            self.assertIn(f, params["filter"])                           # 중고·경매 제외
+        self.assertEqual(headers["Authorization"], "Bearer TOK")
+        self.assertNotIn("X-EBAY-C-ENDUSERCTX", headers)
+        self.src.search(Query("x"))
+        self.assertEqual(self.tokens, [("id", "sec")])                    # 토큰은 한 번만 받아 재사용
+
+    def test_forwarder_zip_makes_shipping_known(self):
+        self.make(forwarder_zip="19720")
+        a = self.src.search(Query("Seiko"))[0]
+        self.assertTrue(a.shipping_known)
+        self.assertIn("zip%3D19720", self.sent[0][1]["X-EBAY-C-ENDUSERCTX"])
+
+    def test_errors_are_not_silent_zero(self):
+        from sources.ebay import parse_items
+        with self.assertRaises(RuntimeError):
+            parse_items({"errors": [{"errorId": 1001, "message": "Invalid access token"}]})
+        with self.assertRaises(RuntimeError):
+            parse_items([])
+        self.assertEqual(parse_items({"total": 0}), [])
+        self.src.token_request = lambda i, s: {"error": "invalid_client", "error_description": "client authentication failed"}
+        with self.assertRaises(RuntimeError) as cm:
+            self.src.search(Query("x"))
+        self.assertIn("client authentication failed", str(cm.exception))
+
+    def test_explicit_only_and_us_forwarder_pricing(self):
+        from core.fx import FX
+        from core.pricing import forwarding_fee, price_offer
+        self.assertTrue(REGISTRY["ebay"].explicit_only)
+        offer = self.src.search(Query("Seiko"))[0]
+        r = Result(spec=Spec(id="x", name="x", category="watch", keyword="x"))
+        price_offer(self.cfg, FX(self.cfg, True), r, offer)
+        self.assertGreater(r.cost_krw, forwarding_fee(self.cfg, "US", "medium"))   # 미국 배대지 요금 포함
+
+    def test_market_ebay_listed(self):
+        import web as W
+        self.assertIn("ebay", M.SEARCH_MARKETS)
+        self.assertEqual(M.SEARCH_MARKETS["ebay"]["lang"], "en")
+        self.assertEqual(set(M.SEARCH_MARKETS), set(W.SEARCH_MARKETS))   # 화면과 CLI 값이 같음
+        self.assertEqual(W.MARKET_SOURCES["ebay"], "ebay")
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,6 +52,17 @@ default_shipping = 3         # 한국 배송비를 모를 때 가정 (USD). 상�
 min_interval = 1.0
 retries = 2
 
+[sources.ebay]                # 이베이 공식 Browse API (python main.py --search ... --market ebay 에서만 사용)
+enabled = true               # 키 2개는 buyagent/.env 에: EBAY_CLIENT_ID (App ID) / EBAY_CLIENT_SECRET (Cert ID)
+endpoint = "https://api.ebay.com/buy/browse/v1/item_summary/search"   # 키 받은 뒤 응답 1건으로 확인 (2026-11-18 미검증)
+token_url = "https://api.ebay.com/identity/v1/oauth2/token"
+limit = 50
+forwarder_zip = ""           # 미국 배대지 우편번호 (예: 면세 주 델라웨어·오리건 창고). 넣으면 배대지까지 배송비를 이베이가 계산
+default_shipping = 10        # 배대지까지 배송비를 모를 때 가정 (USD)
+min_feedback = 98            # 판매자 평가(%)가 이보다 낮으면 경고
+min_interval = 1.0
+retries = 2
+
 # ------------------------------------------------------------
 #  원산지(발송 국가)별 설정 - 새 국가를 붙일 때 여기에 추가
 # ------------------------------------------------------------
