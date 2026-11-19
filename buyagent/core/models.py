@@ -76,6 +76,8 @@ class Result:
     over_duty_free: bool = False
     est_duty_krw: int = 0
     cost_krw: int = 0
+    forwarding_krw: int = 0                           # 개당 원가 중 배대지·국제배송비 (+국내배송비) ÷ 묶음수량
+    shipping_profile: str = ""                        # small / medium / large
     bundle_size: int = 1
     quotes: list[Quote] = field(default_factory=list)
     events: list[str] = field(default_factory=list)   # 이번에 바뀐 것 (품절·재입고·원가 변동) → 항상 알림

@@ -78,6 +78,17 @@ def validate(cfg: dict, specs: list[Spec], registry: dict, base: Path) -> list[t
     if "USD" not in fx_cur:
         err("[fx.manual_krw] 에 USD 없음 → 면세 한도(달러) 계산 불가")
 
+    # ---- 배대지 요금표 확인 날짜 ----
+    from .shipping_rates import checked_dates, stale_messages
+    for origin, d in checked_dates(cfg).items():
+        if origin not in profiles:
+            err(f"[shipping_checked] {origin}: [shipping_profiles.{origin}] 요금표 없음")
+        raw = cfg.get("shipping_checked", {}).get(origin)
+        if d is None and str(raw).strip():
+            err(f"[shipping_checked] {origin} = '{raw}' → 날짜는 YYYY-MM-DD 형식")
+    for m in stale_messages(cfg):
+        warn(m)
+
     # ---- 카테고리 ----
     for key, c in cats.items():
         if key.startswith("_"):

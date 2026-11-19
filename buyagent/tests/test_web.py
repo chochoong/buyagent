@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import shutil
 import sys
@@ -123,6 +124,74 @@ class WebTest(unittest.TestCase):
         self.assertEqual(cmd[1:], ["main.py", "--search=--evil x", "--category=watch",
                                    "--market=rakuten"])   # 옵션으로 오인 안 됨
         self.assertEqual(W.job_command("run")[1:], ["main.py", "--no-alert"])
+
+    def test_rates_edit_and_stale_banner(self):
+        import tomllib
+        from datetime import date
+        page = W.render(self.tmp)
+        self.assertIn("배대지 요금 확인 기록 없음", page)                   # JP = "" → 경고 배너
+        self.assertIn('data-origin="JP"', page)
+        st = self.tmp / "config" / "settings.toml"
+        before = st.read_bytes()
+        self.assertEqual(W.rates_request({"origin": "JP", "small": "7000", "medium": "9800", "large": "15800"}, self.tmp)[0], 200)
+        cfg = tomllib.loads(st.read_text(encoding="utf-8"))
+        self.assertEqual({k: cfg["shipping_profiles"]["JP"][k] for k in ("small", "medium", "large")},
+                         {"small": 7000, "medium": 9800, "large": 15800})
+        self.assertEqual(cfg["shipping_checked"]["JP"], date.today())
+        self.assertEqual(cfg["shipping_profiles"]["US"], tomllib.loads(before.decode("utf-8"))["shipping_profiles"]["US"])
+        crlf = bytes([13, 10])
+        self.assertEqual(crlf in st.read_bytes(), crlf in before)              # 줄바꿈 형식 유지
+        self.assertIn("~0.5kg", st.read_text(encoding="utf-8"))                # 주석 유지
+        self.assertNotIn("배대지 요금 확인 기록 없음", W.render(self.tmp))
+        for bad in ({"origin": "JP", "small": "x", "medium": "1", "large": "2"},
+                    {"origin": "JP", "small": "9000", "medium": "100", "large": "200"},     # 순서 틀림
+                    {"origin": "JP", "small": "1", "medium": "2", "large": "9999999"},
+                    {"origin": "US", "small": "1", "medium": "2", "large": "3"},            # [shipping_checked] 에 없음
+                    {"origin": "JP] x", "small": "1", "medium": "2", "large": "3"}):
+            self.assertEqual(W.rates_request(bad, self.tmp)[0], 400, bad)
+        self.assertEqual(tomllib.loads(st.read_text(encoding="utf-8"))["shipping_profiles"]["JP"]["small"], 7000)
+
+    def test_add_watch_must_words(self):
+        q = {"keyword": "セイコー セレクション クロノグラフ SBTR シリーズ", "category": "watch", "must_include": [],
+             "exclude": [], "market": "rakuten"}
+        self.assertEqual(W.suggest_must(q), "SBTR")                          # 숫자 없는 시리즈 코드도 제안
+        self.assertEqual(W.suggest_must({**q, "must_include": ["SBTQ041"]}), "SBTQ041")
+        self.assertEqual(W.suggest_must({"keyword": "ちいかわ ノート"}), "")
+        code, out = W.add_watch(self.tmp, {"query": q}, "세이코 SBTR", " SBTR | クロノグラフ ")
+        self.assertEqual((code, out["must_include"]), (200, ["SBTR", "クロノグラフ"]))
+        rows = list(csv.DictReader(io.StringIO((self.tmp / "catalog" / "products.csv").read_text(encoding="utf-8-sig"))))
+        self.assertEqual(next(r for r in rows if r["id"] == out["id"])["must_include"], "SBTR|クロノグラフ")
+        self.assertEqual(W.add_watch(self.tmp, {"query": {**q, "keyword": "x y"}}, "", "|".join("abcdef"))[0], 400)
+        self.assertIn('data-must="', W.render(self.tmp))
+
+    def test_pause_all(self):
+        saved = W.schedule_status
+        W.schedule_status = lambda: {"registered": False, "next": ""}
+        self.addCleanup(lambda: setattr(W, "schedule_status", saved))
+        page = W.render(self.tmp)
+        self.assertIn('data-act="pause" data-paused="1"', page)
+        self.assertIn("등록 안 됨", page)
+        self.assertEqual(W.pause_request({"paused": "yes"}, self.tmp)[0], 400)
+        self.assertEqual(W.pause_request({"paused": True}, self.tmp), (200, {"paused": True}))
+        page = W.render(self.tmp)
+        self.assertIn("감시 전체 멈춤 중", page)
+        self.assertIn('data-paused="0"', page)
+        W.schedule_status = lambda: {"registered": True, "next": "2026-11-19 오후 4:00:00"}
+        self.assertIn("매시간", W.render(self.tmp))
+        self.assertEqual(W.pause_request({"paused": False}, self.tmp)[0], 200)
+        self.assertNotIn("감시 전체 멈춤 중", W.render(self.tmp))
+
+    def test_cost_cell_shows_forwarding(self):
+        it = {"cost_krw": 183117, "forwarding_krw": 15000, "shipping_profile": "medium",
+              "best_offer": {"shipping": 0, "shipping_known": True, "currency": "JPY"}}
+        cell = W.cost_cell(it)
+        self.assertIn("183,117원", cell)
+        self.assertIn("배대지 15,000원 포함 (medium)", cell)
+        self.assertIn("현지배송 무료", cell)                                   # 현지 무료여도 배대지 비용 표시
+        it2 = {**it, "forwarding_krw": 0, "best_offer": {"shipping": None, "shipping_known": False}}
+        self.assertIn("배대지 없음 (직배송)", W.cost_cell(it2))
+        self.assertIn("현지배송 미확인", W.cost_cell(it2))
+        self.assertEqual(W.cost_cell({"cost_krw": None}), W.money(None))
 
     def test_search_request_validation(self):
         self.assertEqual(W.search_request({"query": " ", "category": "watch"}, self.tmp)[0], 400)

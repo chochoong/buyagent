@@ -81,6 +81,8 @@ def price_offer(cfg: dict, fx: FX, res: Result, offer: Offer, bundle_default: in
         res.alerts.append(f"1회 배송 물품가 ${shipment_usd:,.2f} > ${limit} → 관부가세 발생 "
                           f"(개당 약 {res.est_duty_krw:,}원, 판매가에 포함)")
 
+    res.shipping_profile = profile
+    res.forwarding_krw = int(round((fwd + c["domestic_shipping_krw"]) / bundle))
     res.cost_krw = int(round(
         unit_krw * (1 + c["card_fx_fee_rate"])
         + (fwd + c["domestic_shipping_krw"]) / bundle

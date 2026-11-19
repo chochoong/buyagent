@@ -41,6 +41,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from core.pause import paused_since, set_paused
+from core.shipping_rates import SIZES, checked_dates, stale_messages, update_rates
+
 BASE = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
@@ -92,6 +95,110 @@ def categories(base: Path = BASE) -> dict[str, dict]:
     return {k: v for k, v in cats.items() if not k.startswith("_")}
 
 
+def settings(base: Path = BASE) -> dict:
+    try:
+        with open(base / "config" / "settings.toml", "rb") as f:
+            return tomllib.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+SIZE_NAMES = {"small": "small (~0.5kg)", "medium": "medium (~2kg)", "large": "large (~5kg)"}
+
+
+def rates_section(cfg: dict) -> tuple[str, str]:
+    """(경고 배너, '배대지 요금' 본문). [shipping_checked] 에 적힌 나라만 고칠 수 있음"""
+    stale = stale_messages(cfg)
+    banner = "".join(f'<p class="warn small">⚠ {e(m)}</p>' for m in stale)
+    dates = checked_dates(cfg)
+    rows = []
+    for origin, d in dates.items():
+        table_ = cfg.get("shipping_profiles", {}).get(origin, {})
+        name = cfg.get("origins", {}).get(origin, {}).get("name", origin)
+        inputs = "".join(
+            f'<label class="small">{e(SIZE_NAMES[k])} <input type="number" name="{k}" min="0" max="500000" step="100" '
+            f'required value="{e(table_.get(k, ""))}" style="width:110px;min-width:0;flex:none">원</label> '
+            for k in SIZES)
+        rows.append(f'<form class="row rates" data-origin="{e(origin)}"><b>{e(name)}</b> {inputs}'
+                    f'<span class="small {"muted" if d else "warn"}">마지막 확인: {e(d or "기록 없음 (추정값)")}</span>'
+                    f'<button type="submit" class="sm">저장 (오늘 확인함)</button></form>')
+    max_days = cfg.get("shipping_checked", {}).get("max_days", 30)
+    body = ("".join(rows) or '<p class="muted">settings.toml [shipping_checked] 에 나라가 없어요.</p>') + (
+        f'<p class="small muted">쓰는 배대지의 공식 요금표(항공)에서 0.5kg·2kg·5kg 요금을 넣고 저장하세요. '
+        f'저장하면 확인 날짜가 오늘로 바뀌고, {e(max_days)}일이 지나면 다시 알려 줘요. '
+        f'비교 사이트(짐스캐너 등)는 보고 참고만 하고 자동으로 가져오지 않아요(이용약관상 영리 목적 수집 금지).</p>')
+    return banner, body
+
+
+def rates_request(body: dict, base: Path = BASE) -> tuple[int, dict]:
+    origin = str(body.get("origin") or "")
+    if origin not in checked_dates(settings(base)):
+        return 400, {"error": "settings.toml [shipping_checked] 에 없는 나라입니다."}
+    try:
+        fees = {k: int(str(body.get(k, "")).strip()) for k in SIZES}
+        update_rates(base / "config" / "settings.toml", origin, fees)
+    except ValueError as err:
+        return 400, {"error": str(err) or "요금은 숫자(원)로 넣어 주세요."}
+    return 200, {"ok": True}
+
+
+TASK_NAME = "buyagent"      # schedule.bat 이 등록하는 작업 스케줄러 이름 (매시간)
+
+
+def schedule_status() -> dict:
+    """작업 스케줄러 등록 여부와 다음 실행 시각 (읽기만 함, 등록·변경은 schedule.bat 으로 사람이)"""
+    if os.name != "nt":
+        return {"registered": False, "next": ""}
+    try:
+        p = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME, "/FO", "CSV", "/NH"],
+                           capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return {"registered": False, "next": ""}
+    if p.returncode != 0:
+        return {"registered": False, "next": ""}
+    text = p.stdout.decode("cp949", errors="replace")
+    row = next(csv.reader(io.StringIO(text.strip().splitlines()[0])), []) if text.strip() else []
+    return {"registered": True, "next": row[1] if len(row) > 1 else ""}
+
+
+def watch_status(base: Path, latest: dict | None) -> str:
+    """감시 상품 위: 자동 실행 주기·마지막 감시·전체 멈춤 버튼"""
+    since = paused_since(base)
+    st = schedule_status()
+    if st["registered"]:
+        nxt = f", 다음 {e(st['next'])}" if st["next"] else ""
+        sched = f"자동 실행: <b>매시간</b> (작업 스케줄러 '{TASK_NAME}'{nxt})"
+    else:
+        sched = ('자동 실행: <span class="warn">등록 안 됨</span> → 정기 감시·디스코드 알림을 받으려면 '
+                 '<code>schedule.bat</code> 을 더블클릭하세요')
+    last = (latest or {}).get("run_at") or ""
+    last_txt = f' · 마지막 감시 {e(last[:16].replace("T", " "))}' + (" (예시 데이터)" if (latest or {}).get("demo") else "") if last else " · 감시 실행 기록 없음"
+    if since:
+        state = f'<span class="warn">⏸ 감시 전체 멈춤 중 ({e(since)}부터) — 정기 실행이 와도 조회·알림을 안 해요</span>'
+        btn = '<button class="sm" data-act="pause" data-paused="0">▶ 감시 다시 시작</button>'
+    else:
+        state = '<span class="ok">● 감시 중</span>'
+        btn = '<button class="sm" data-act="pause" data-paused="1">⏸ 감시 전체 멈춤</button>'
+    return f'<div class="row between small"><span>{state} · {sched}{last_txt}</span>{btn}</div>'
+
+
+def pause_request(body: dict, base: Path = BASE) -> tuple[int, dict]:
+    if not isinstance(body.get("paused"), bool):
+        return 400, {"error": "paused 값(true/false)이 필요합니다."}
+    set_paused(base, body["paused"])
+    return 200, {"paused": body["paused"]}
+
+
+def local_ship_text(o: dict) -> str:
+    """현지(판매처 → 배대지) 배송비 설명"""
+    if not o:
+        return ""
+    if not o.get("shipping_known"):
+        return "현지배송 미확인"
+    s = o.get("shipping") or 0
+    return "현지배송 무료" if not s else f"현지배송 {money(s, o.get('currency'))} 포함"
+
+
 def market_names(base: Path = BASE) -> dict[str, str]:
     try:
         with open(base / "config" / "settings.toml", "rb") as f:
@@ -127,12 +234,33 @@ def make_id(keyword: str, must: list[str], taken: set[str]) -> str:
     return pid
 
 
-def add_watch(base: Path, search: dict, name: str = "") -> tuple[int, dict]:
-    """마지막 직접 검색 조건을 감시 목록에 추가. 이미 같은 검색어가 있으면 거절"""
+def suggest_must(q: dict) -> str:
+    """감시 추가 때 '꼭 들어갈 단어' 기본값: 검색 때 쓴 필수 단어, 없으면 검색어 속 영문 대문자·숫자 코드(SBTR, SBTQ041)"""
+    must = [w for w in q.get("must_include") or [] if w]
+    if not must:
+        must = [w for w in (q.get("keyword") or "").split()
+                if len(w) >= 3 and re.fullmatch(r"[A-Z0-9][A-Z0-9-]*", w) and any(c.isalpha() for c in w)]
+    return "|".join(must)
+
+
+def parse_must(text: str) -> list[str]:
+    words = [w.strip() for w in str(text or "").split("|") if w.strip()]
+    if len(words) > 5 or any(len(w) > 30 for w in words):
+        raise ValueError("꼭 들어갈 단어는 5개까지, 단어마다 30자 이내로 넣어 주세요.")
+    return words
+
+
+def add_watch(base: Path, search: dict, name: str = "", must: str | None = None) -> tuple[int, dict]:
+    """마지막 직접 검색 조건을 감시 목록에 추가. 이미 같은 검색어가 있으면 거절
+    must = 상품명에 꼭 들어가야 할 단어('|' 구분). None 이면 검색 때 조건 그대로"""
     q = (search or {}).get("query") or {}
     keyword, cat = (q.get("keyword") or "").strip(), (q.get("category") or "").strip()
     if not keyword or not cat:
         return 400, {"error": "먼저 검색을 해 주세요."}
+    try:
+        must_words = list(q.get("must_include") or []) if must is None else parse_must(must)
+    except ValueError as err:
+        return 400, {"error": str(err)}
     path = base / "catalog" / "products.csv"
     with CSV_LOCK:
         header, rows = read_csv(path)
@@ -143,16 +271,16 @@ def add_watch(base: Path, search: dict, name: str = "") -> tuple[int, dict]:
         same = next((r for r in rows if (r.get("keyword") or "").strip() == keyword), None)
         if same:
             return 409, {"error": f"이미 감시 중인 검색어입니다 (ID {same.get('id')})."}
-        pid = make_id(keyword, q.get("must_include") or [], {(r.get("id") or "").strip() for r in rows})
+        pid = make_id(keyword, must_words, {(r.get("id") or "").strip() for r in rows})
         rows.append({
             "id": pid, "name": (name or keyword).strip()[:100], "category": cat, "keyword": keyword,
-            "must_include": "|".join(q.get("must_include") or []), "exclude": "|".join(q.get("exclude") or []),
+            "must_include": "|".join(must_words), "exclude": "|".join(q.get("exclude") or []),
             "sources": MARKET_SOURCES.get(q.get("market") or "rakuten", ""),
             "my_price_coupang": "0", "my_price_naver": "0", "active": "Y",
             "memo": f"{FROM_SEARCH} {date.today().isoformat()}",
         })
         write_csv_atomic(path, header, rows)
-    return 200, {"id": pid}
+    return 200, {"id": pid, "must_include": must_words}
 
 
 def toggle_watch(base: Path, pid: str) -> tuple[int, dict]:
@@ -261,6 +389,21 @@ def table(heads: list[str], rows: list[list[str]]) -> str:
     return f'<div class="tw"><table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table></div>'
 
 
+def cost_cell(it: dict) -> str:
+    """개당 원가 + 그 안에 들어간 배대지 비용 (현지 무료배송이어도 배대지 비용은 따로 듦)"""
+    cost = it.get("cost_krw")
+    if not isinstance(cost, (int, float)):
+        return money(cost)
+    fwd, prof = it.get("forwarding_krw"), it.get("shipping_profile")
+    parts = []
+    if isinstance(fwd, (int, float)):
+        parts.append(f"배대지 {money(fwd)} 포함" + (f" ({e(prof)})" if prof else "") if fwd else "배대지 없음 (직배송)")
+    ls = local_ship_text(it.get("best_offer") or {})
+    if ls:
+        parts.append(ls)
+    return money(cost) + (f'<div class="small muted">{" · ".join(parts)}</div>' if parts else "")
+
+
 STATUS = {"ok": ("판매 가능", "ok"), "blocked": ("차단", "bad"), "no_offer": ("판매처 없음", "warn"), "error": ("오류", "bad")}
 
 
@@ -284,7 +427,7 @@ def result_rows(items: list[dict], markets: list[str], names: dict[str, str], nu
             f'<span class="{cls}">{e(label)}</span>' + (f'<div class="small">{clip(why, 50)}</div>' if why else ""),
             link(o.get("url"), o.get("shop") or o.get("source") or "판매처") if o else '<span class="muted">–</span>',
             (money(o.get("price"), o.get("currency")) + ship) if o else "",
-            money(it.get("cost_krw")), *cells,
+            cost_cell(it), *cells,
             clip(" / ".join((it.get("events") or []) + (it.get("warnings") or [])), 90)])
     return heads, rows
 
@@ -296,6 +439,8 @@ def render(base: Path = BASE) -> str:
     latest, l_err = read_json(base / "reports" / "latest.json")
     _, products = read_csv(base / "catalog" / "products.csv")
     _, prices = read_csv(base / "catalog" / "manual_prices.csv")
+
+    banner, rbody = rates_section(settings(base))
 
     # --- 직접 검색
     last = (search or {}).get("query") or {}
@@ -321,7 +466,8 @@ def render(base: Path = BASE) -> str:
         excl = search.get("excluded") or {}
         watched = any((p.get("keyword") or "").strip() == last.get("keyword") for p in products)
         add = ('<span class="muted small">이 검색어는 이미 감시 중</span>' if watched else
-               f'<button data-act="add" data-name="{e(last.get("keyword_original") or last.get("keyword"))}">'
+               f'<button data-act="add" data-name="{e(last.get("keyword_original") or last.get("keyword"))}" '
+               f'data-must="{e(suggest_must(last))}">'
                '＋ 이 검색을 감시에 추가</button>')
         orig = last.get("keyword_original")
         sbody = (f'<div class="row between"><div class="small">「{e(last.get("keyword"))}」'
@@ -359,7 +505,8 @@ def render(base: Path = BASE) -> str:
                      e(p.get("sources") or "기본"),
                      f'<button class="sm" data-act="toggle" data-id="{e(p.get("id"))}">{"켜짐 ✓" if on else "꺼짐"}</button>',
                      tag + clip(memo, 40)])
-    pbody = table(["ID", "상품", "카테고리", "검색어", "판매처 소스", "감시", "메모"], prow) if prow else '<p class="muted">없음</p>'
+    pbody = watch_status(base, latest) + (
+        table(["ID", "상품", "카테고리", "검색어", "판매처 소스", "감시", "메모"], prow) if prow else '<p class="muted">없음</p>')
 
     # --- 수동 가격
     mrow = []
@@ -372,7 +519,7 @@ def render(base: Path = BASE) -> str:
     mbody = table(["상품 ID", "판매처", "가격", "현지 배송비", "재고", "확인 날짜", "메모"], mrow) if mrow else '<p class="muted">없음</p>'
 
     return PAGE.format(
-        css=CSS, js=JS, form=form, sbody=sbody, lbody=lbody, pbody=pbody, mbody=mbody,
+        css=CSS, js=JS, form=form, sbody=sbody, lbody=lbody, pbody=pbody, mbody=mbody, banner=banner, rbody=rbody,
         n_products=len(products), n_prices=len(prices), base=e(base))
 
 
@@ -422,13 +569,31 @@ document.getElementById("search").addEventListener("submit", function (ev) {
   var f = new FormData(ev.target);
   api("/api/search", {query: f.get("query"), category: f.get("category"), market: f.get("market")}).then(poll).catch(function (err) { alert(err.message); });
 });
+document.querySelectorAll("form.rates").forEach(function (f) {
+  f.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var d = new FormData(f), body = {origin: f.dataset.origin};
+    ["small", "medium", "large"].forEach(function (k) { body[k] = d.get(k); });
+    if (!confirm("배대지 요금을 저장할까요? 다음 감시부터 모든 상품의 개당 원가·권장가가 이 값으로 계산돼요.")) return;
+    api("/api/rates", body).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
+  });
+});
 document.addEventListener("click", function (ev) {
   var b = ev.target.closest("button[data-act]");
   if (!b) return;
   if (b.dataset.act === "add") {
     var name = prompt("감시 목록에 넣을 상품 이름 (한국어로 알아보기 쉽게)", b.dataset.name);
     if (name === null) return;
-    api("/api/add", {name: name}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
+    var must = prompt("상품명에 꼭 들어가야 할 단어 (모델명·시리즈명, 여러 개는 | 로 구분)\\n" +
+                      "비워 두면 시곗줄·케이스·다른 모델이 최저가로 잡힐 수 있어요.", b.dataset.must || "");
+    if (must === null) return;
+    if (!must.trim() && !confirm("꼭 들어갈 단어 없이 추가할까요? (캐릭터 상품처럼 모델명이 없는 경우만 권장)")) return;
+    api("/api/add", {name: name, must: must}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
+  } else if (b.dataset.act === "pause") {
+    var on = b.dataset.paused === "1";
+    if (!confirm(on ? "감시를 전체 멈출까요? 정기 실행이 와도 상품 조회·디스코드 알림을 하지 않아요. (상품별 켜짐/꺼짐은 그대로)"
+                    : "감시를 다시 시작할까요? 다음 정기 실행부터 켜진 상품을 조회하고 알림을 보내요.")) return;
+    api("/api/pause", {paused: on}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
   } else if (b.dataset.act === "toggle") {
     api("/api/toggle", {id: b.dataset.id}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
   } else if (b.dataset.act === "run") {
@@ -446,10 +611,11 @@ PAGE = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <header><h1>🛒 buyagent 구매대행</h1><span class="small muted">{base}</span>
 <span style="flex:1"></span><button data-act="run" title="main.py --no-alert">▶ 감시 시험 실행 (알림 없이)</button></header>
 <main>
-<section><h2>직접 검색</h2>{form}{sbody}</section>
+{banner}<section><h2>직접 검색</h2>{form}{sbody}</section>
 <section><h2>최근 감시 결과</h2>{lbody}</section>
 <section><h2>감시 상품 <span class="small muted">{n_products}개 · catalog/products.csv</span></h2>
 <p class="small muted">시장조사 → 공급처 발굴(2번)에서 넘어온 상품과 직접 검색에서 추가한 상품이 함께 있어요. 세부 조건(JAN·필수 단어·판매처)은 CSV에서 고쳐요.</p>{pbody}</section>
+<section><h2>배대지 요금 <span class="small muted">개당 원가에 들어가는 배대지·국제배송비 · config/settings.toml</span></h2>{rbody}</section>
 <section><h2>수동 가격 <span class="small muted">{n_prices}줄 · catalog/manual_prices.csv</span></h2>{mbody}</section>
 </main><div id="job" hidden></div>
 <script>{js}</script></body></html>"""
@@ -508,7 +674,12 @@ class Handler(BaseHTTPRequestHandler):
             code, out = start_job("run", (), "감시 시험 실행 (알림 없이)", self.base)
         elif path == "/api/add":
             code, out = add_watch(self.base, read_json(self.base / "reports" / "search.json")[0] or {},
-                                  str(body.get("name") or ""))
+                                  str(body.get("name") or ""),
+                                  None if body.get("must") is None else str(body.get("must")))
+        elif path == "/api/pause":
+            code, out = pause_request(body, self.base)
+        elif path == "/api/rates":
+            code, out = rates_request(body, self.base)
         elif path == "/api/toggle":
             code, out = toggle_watch(self.base, str(body.get("id") or ""))
         else:

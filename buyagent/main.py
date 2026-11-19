@@ -48,6 +48,8 @@ from core.models import Offer, Query, Result, Spec         # noqa: E402
 from core.pricing import price_offer                       # noqa: E402
 from core.report import fmt_result, send_webhook, write_csv, write_latest, write_search  # noqa: E402
 from core.rules import category_label, check_spec, filter_offers, warnings_for  # noqa: E402
+from core.shipping_rates import stale_messages              # noqa: E402
+from core.pause import paused_since                         # noqa: E402
 from core.storage import Store, alert_key                  # noqa: E402
 from core.validate import ERROR, validate                  # noqa: E402
 from sources import REGISTRY, build_sources                # noqa: E402
@@ -434,6 +436,14 @@ def run_all(cfg: dict, args, specs: list[Spec], all_specs: list[Spec]) -> str:
     notify: list[str] = []
     tried, failures = 0, []     # 전부 실패하면 키 만료·네트워크 문제일 가능성 → 실행 실패로 알림
 
+    # 배대지 요금표 확인할 때가 됐으면 알림 (같은 상태면 한 번만)
+    stale = stale_messages(cfg)
+    for m in stale:
+        print(f"[배대지 요금] {m}")
+    stale_new = run.store.fresh_alerts("_shipping_rates", stale)
+    if stale_new:
+        notify += ["*배대지 요금*"] + [f"• {m}" for m in stale_new]
+
     print("\n" + "=" * 72 + "\n[고정 모니터링 상품]")
     for spec in (s for s in specs if not s.discover):
         try:
@@ -522,6 +532,10 @@ def main() -> None:
         if args.search is not None:
             sys.exit(search(cfg, args))
         print(f"===== {datetime.now():%Y-%m-%d %H:%M:%S} 실행 =====")
+        since = None if args.demo else paused_since(BASE)
+        if since:                       # 화면에서 '감시 전체 멈춤' → 조회·알림 없이 끝 (실패 아님)
+            print(f"[멈춤] 감시 전체 멈춤 중 ({since}부터) → 조회·알림 안 함. 화면에서 '감시 다시 시작'을 누르세요.")
+            sys.exit(0)
         problem = run_all(cfg, args, specs, all_specs)
     except Exception as e:              # 프로그램 전체가 죽는 경우 (설정 파일 문법 오류 등)
         traceback.print_exc()

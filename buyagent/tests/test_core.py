@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import csv
 import io
 import json
 import shutil
@@ -117,6 +118,27 @@ class TestPricing(TmpDirTest):
         self.assertEqual(self.run.cheapest(self.spec, [eur, self.jp]).offer.key, "jp")
         only = self.run.cheapest(self.spec, [eur])
         self.assertTrue(any("계산 불가" in a for a in only.alerts))
+
+    def test_stale_shipping_rates(self):
+        from datetime import date
+        from core.shipping_rates import stale_messages
+        c = {"origins": {"JP": {"name": "일본"}}, "shipping_checked": {"max_days": 30, "JP": ""}}
+        self.assertIn("확인 기록 없음", stale_messages(c)[0])
+        c["shipping_checked"]["JP"] = date(2026, 11, 1)
+        self.assertEqual(stale_messages(c, date(2026, 12, 1)), [])           # 30일째는 아직
+        msg = stale_messages(c, date(2026, 12, 2))
+        self.assertEqual(len(msg), 1)
+        self.assertIn("2026-11-01", msg[0])
+        self.assertEqual(msg, stale_messages(c, date(2026, 12, 20)))         # 날이 지나도 문장이 같음 → 알림 한 번
+
+    def test_forwarding_in_result(self):
+        from core.fx import FX
+        from core.pricing import price_offer
+        c = cfg()
+        r = Result(spec=Spec(id="x", name="x", category="watch", keyword="x"))
+        price_offer(c, FX(c, True), r, Offer("demo", "k", "n", 19700, "JPY", "JP", shipping=0, shipping_known=True))
+        self.assertEqual((r.forwarding_krw, r.shipping_profile), (c["shipping_profiles"]["JP"]["medium"], "medium"))
+        self.assertIn(f"배대지 {r.forwarding_krw:,}원 포함", " / ".join(M.fmt_result(r)))
 
     def test_small_shipping_hint(self):
         from core.fx import FX
@@ -776,6 +798,14 @@ class TestLatestJson(TmpDirTest):
         shutil.copytree(BASE / "config", self.tmp / "config",
                         ignore=shutil.ignore_patterns("settings.local.toml*"))   # 실제 키는 복사 안 함
         M.BASE, M.HEALTH_FILE = self.tmp, self.tmp / "health.json"
+        # 실제 products.csv 에서 사용자가 꺼 둔 상품도 켜서 시험 (차단·수동 가격 예시가 빠지지 않게)
+        pc = self.tmp / "catalog" / "products.csv"
+        with pc.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+        with pc.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows({**r, "active": "Y"} for r in rows)
 
     def tearDown(self):
         M.BASE, M.HEALTH_FILE, M.load_config, sys.argv = self.saved
@@ -799,7 +829,7 @@ class TestLatestJson(TmpDirTest):
         self.assertTrue(d["ok"] and d["demo"])
         self.assertEqual(d["markets"], list(CFG["markets"]))
         keys = {"kind", "id", "hub_product_id", "name", "category", "status", "blocked_reason",
-                "best_offer", "cost_krw", "quotes", "warnings", "events", "notice"}
+                "best_offer", "cost_krw", "forwarding_krw", "shipping_profile", "quotes", "warnings", "events", "notice"}
         offer_keys = {"source", "shop", "url", "price", "shipping", "shipping_known", "currency", "in_stock"}
         self.assertTrue(d["items"])
         for it in d["items"]:
@@ -819,6 +849,15 @@ class TestLatestJson(TmpDirTest):
                 self.assertTrue(it["blocked_reason"])
         self.assertIn("blocked", {i["status"] for i in d["items"]})
         self.assertEqual(list((self.tmp / "reports").glob(".latest_*")), [], "임시 파일이 남으면 안 됨")
+
+    def test_paused_skips_watch_run(self):
+        from core.pause import set_paused
+        set_paused(self.tmp, True)
+        self.assertEqual(self._main("--no-alert"), 0)                     # 멈춤 → 조회 없이 정상 종료
+        self.assertFalse((self.tmp / "reports" / "latest.json").exists())
+        self.assertEqual(self._main("--demo"), 0)                         # 예시 실행은 막지 않음
+        self.assertTrue((self.tmp / "reports" / "latest.json").exists())
+        set_paused(self.tmp, False)
 
     def test_failure_writes_error_and_exit_code(self):
         c = load_config(self.tmp)
