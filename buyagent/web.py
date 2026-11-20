@@ -41,6 +41,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from core import naver_low
 from core.pause import paused_since, set_paused
 from core.shipping_rates import SIZES, checked_dates, stale_messages, update_rates
 
@@ -327,6 +328,21 @@ def toggle_watch(base: Path, pid: str) -> tuple[int, dict]:
     return 200, {"id": pid, "active": row["active"]}
 
 
+def naver_low_request(body: dict, base: Path = BASE) -> tuple[int, dict]:
+    """[네이버 최저가 적기] → catalog/naver_prices.csv (확인 날짜 = 오늘, 빈 값 = 지우기)"""
+    pid = str(body.get("id") or "").strip()
+    _, products = read_csv(base / "catalog" / "products.csv")
+    if not any((p.get("id") or "").strip() == pid for p in products):
+        return 404, {"error": f"ID {pid} 가 products.csv 에 없습니다."}
+    price = body.get("price")
+    try:
+        with CSV_LOCK:
+            row = naver_low.save(base, pid, "" if price is None else str(price), str(body.get("memo") or ""))
+    except ValueError as err:
+        return 400, {"error": str(err)}
+    return 200, {"id": pid, "saved": row}
+
+
 # ---------------------------------------------------------------- 작업 실행 (main.py)
 def job_command(kind: str, arg: tuple = ()) -> list[str]:
     if kind == "search":
@@ -436,7 +452,30 @@ def cost_cell(it: dict) -> str:
 STATUS = {"ok": ("판매 가능", "ok"), "blocked": ("차단", "bad"), "no_offer": ("판매처 없음", "warn"), "error": ("오류", "bad")}
 
 
-def result_rows(items: list[dict], markets: list[str], names: dict[str, str], numbered: bool) -> tuple[list[str], list]:
+def naver_cell(kw: str, st: dict | None, rec, pid: str = "") -> str:
+    """스마트스토어 권장가 아래: [네이버 최저가 보기] 링크 + 사람이 적은 최저가 (자동 수집 아님)"""
+    out = '<div class="small">' + link(naver_low.search_url(kw), "네이버 최저가 보기 ↗") + "</div>" if kw else ""
+    if st:
+        cmp = ""
+        if isinstance(rec, (int, float)) and st["price"]:
+            d = (rec - st["price"]) / st["price"]
+            cmp = (f' · <span class="warn">권장가가 {d:.0%} 높음</span>' if d > 0.005 else
+                   f' · <span class="ok">권장가가 {-d:.0%} 낮음</span>' if d < -0.005 else " · 권장가와 같음")
+        when = (f'<span class="tag unk">다시 확인 필요 ({st["days"]}일 전)</span>' if st["stale"]
+                else f'{e(st["checked"][5:])} 확인')
+        tip = f' title="메모: {e(st["memo"])}"' if st["memo"] else ""
+        out += f'<div class="small"{tip}>네이버 최저가 {money(st["price"])} · {when}{cmp}</div>'
+    elif pid:
+        out += '<div class="small muted">네이버 최저가 미입력</div>'
+    if pid:
+        out += (f'<button class="sm" data-act="naverlow" data-id="{e(pid)}" '
+                f'data-price="{e(st["price"] if st else "")}" data-memo="{e(st["memo"] if st else "")}">최저가 적기</button>')
+    return out
+
+
+def result_rows(items: list[dict], markets: list[str], names: dict[str, str], numbered: bool,
+                naver=None) -> tuple[list[str], list]:
+    """naver(it) → (검색어, 적은 값 상태, 상품 ID) — 스마트스토어 칸 아래 네이버 최저가 표시용"""
     heads = (["#"] if numbered else []) + ["상품", "판정", "최저가 판매처", "현지가", "개당 원가"] \
         + [f"{names.get(m, m)} 권장가" for m in markets] + ["경고·알림"]
     rows = []
@@ -448,8 +487,12 @@ def result_rows(items: list[dict], markets: list[str], names: dict[str, str], nu
         cells = []
         for m in markets:
             q = quotes.get(m)
-            cells.append(f'{money(q.get("recommended_price"))}<div class="small muted">마진 {money(q.get("margin"))}</div>'
-                         if q else '<span class="muted">–</span>')
+            cell = (f'{money(q.get("recommended_price"))}<div class="small muted">마진 {money(q.get("margin"))}</div>'
+                    if q else '<span class="muted">–</span>')
+            if m == "naver" and naver:
+                kw, st, pid = naver(it)
+                cell += naver_cell(kw, st, (q or {}).get("recommended_price"), pid)
+            cells.append(cell)
         why = it.get("blocked_reason")
         rows.append(([str(i)] if numbered else []) + [
             clip(it.get("name") or it.get("id"), 70) + (f'<div class="small muted">{e(it.get("id"))}</div>' if not numbered else ""),
@@ -469,7 +512,16 @@ def render(base: Path = BASE) -> str:
     _, products = read_csv(base / "catalog" / "products.csv")
     _, prices = read_csv(base / "catalog" / "manual_prices.csv")
 
-    banner, rbody = rates_section(settings(base))
+    cfg = settings(base)
+    banner, rbody = rates_section(cfg)
+    lows, low_days = naver_low.load(base), naver_low.max_days(cfg)
+    by_id = {(p.get("id") or "").strip(): p for p in products}
+
+    def watch_naver(it):
+        p = by_id.get(str(it.get("id") or ""))
+        pid = str(it.get("id") or "") if p else ""
+        kw = naver_low.link_keyword(p) if p else str(it.get("name") or "")
+        return kw, naver_low.status(lows.get(pid), low_days), pid
 
     # --- 직접 검색
     last = (search or {}).get("query") or {}
@@ -491,7 +543,9 @@ def render(base: Path = BASE) -> str:
     elif not search:
         sbody = '<p class="muted">아직 검색한 결과가 없어요.</p>'
     else:
-        heads, rows = result_rows(search.get("items") or [], search.get("markets") or [], names, True)
+        s_kw = suggest_must(last).split("|")[0].strip() or last.get("keyword_original") or last.get("keyword") or ""
+        heads, rows = result_rows(search.get("items") or [], search.get("markets") or [], names, True,
+                                  lambda it: (s_kw, None, ""))
         excl = search.get("excluded") or {}
         watched = any((p.get("keyword") or "").strip() == last.get("keyword") for p in products)
         add = ('<span class="muted small">이 검색어는 이미 감시 중</span>' if watched else
@@ -515,7 +569,7 @@ def render(base: Path = BASE) -> str:
     elif not latest:
         lbody = '<p class="muted">아직 감시를 실행한 적이 없어요. [시험 실행]을 누르거나 python main.py 를 실행하세요.</p>'
     else:
-        heads, rows = result_rows(latest.get("items") or [], latest.get("markets") or [], names, False)
+        heads, rows = result_rows(latest.get("items") or [], latest.get("markets") or [], names, False, watch_naver)
         lbody = (f'<p class="small">{e((latest.get("run_at") or latest.get("generated_at") or "")[:16].replace("T", " "))} 실행'
                  + (" · 예시 데이터(--demo)" if latest.get("demo") else "")
                  + (f' · <span class="bad">실패: {e(latest.get("error"))}</span>' if not latest.get("ok") else "")
@@ -628,6 +682,12 @@ document.addEventListener("click", function (ev) {
     if (!confirm(on ? "감시를 전체 멈출까요? 정기 실행이 와도 상품 조회·디스코드 알림을 하지 않아요. (상품별 켜짐/꺼짐은 그대로)"
                     : "감시를 다시 시작할까요? 다음 정기 실행부터 켜진 상품을 조회하고 알림을 보내요.")) return;
     api("/api/pause", {paused: on}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
+  } else if (b.dataset.act === "naverlow") {
+    var price = prompt("네이버 쇼핑에서 직접 본 최저가 (원, 숫자만)\\n[네이버 최저가 보기]로 확인한 값을 적어요. 비우면 지워요.", b.dataset.price || "");
+    if (price === null) return;
+    var memo = price.trim() ? prompt("메모 (판매처, 배송비 포함 여부 등 · 비워도 됨)", b.dataset.memo || "") : "";
+    if (memo === null) return;
+    api("/api/naver_low", {id: b.dataset.id, price: price.trim(), memo: memo}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
   } else if (b.dataset.act === "toggle") {
     api("/api/toggle", {id: b.dataset.id}).then(function () { location.reload(); }).catch(function (err) { alert(err.message); });
   } else if (b.dataset.act === "run") {
@@ -716,6 +776,8 @@ class Handler(BaseHTTPRequestHandler):
             code, out = pause_request(body, self.base)
         elif path == "/api/rates":
             code, out = rates_request(body, self.base)
+        elif path == "/api/naver_low":
+            code, out = naver_low_request(body, self.base)
         elif path == "/api/toggle":
             code, out = toggle_watch(self.base, str(body.get("id") or ""))
         else:

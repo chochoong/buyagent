@@ -139,11 +139,12 @@ max_price_multiple = 2.0
 # ------------------------------------------------------------
 #  네이버 검색어 트렌드 (NAVER API HUB) — python research.py
 #  키 발급: 네이버 클라우드 플랫폼 콘솔 → NAVER API HUB → Application 등록 (검색어 트렌드)
-#  ※ 네이버 쇼핑 검색 API(상품·가격)는 2026-07-31 종료 → 국내 판매가는 직접 입력
+#  키는 buyagent/.env 에만: NAVER_CLIENT_ID=… / NAVER_CLIENT_SECRET=… (코드·로그·커밋에 쓰지 않음)
+#  ※ 네이버 쇼핑 검색 API(상품·가격)는 2026-07-31 종료, API HUB 에도 쇼핑 검색 없음 (2026-11-20 확인)
+#    → 네이버 최저가는 화면 [네이버 최저가 보기] 링크로 보고 [최저가 적기]로 입력 (catalog/naver_prices.csv)
 # ------------------------------------------------------------
-[naver]
-client_id = ""               # → settings.local.toml 에 입력 (API HUB Client ID)
-client_secret = ""           # → settings.local.toml 에 입력 (API HUB Client Secret)
+[naver_low]
+max_days = 30                # 적은 네이버 최저가가 이 날수보다 오래되면 화면에 '다시 확인 필요'
 
 [alerts]
 webhook_url = ""             # Slack 또는 Discord → settings.local.toml 에 입력

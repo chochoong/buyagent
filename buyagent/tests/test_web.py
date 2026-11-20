@@ -296,5 +296,64 @@ class WebTest(unittest.TestCase):
         self.assertEqual(self.call(url + "/api/search", {"query": "x", "category": "watch"})[0], 409)
 
 
+class NaverLowTest(unittest.TestCase):
+    """네이버 최저가: 링크 + 사람이 적은 값 (자동 수집 없음)"""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        shutil.copytree(BASE / "catalog", self.tmp / "catalog")
+        (self.tmp / "catalog" / "naver_prices.csv").write_text("id,price,checked,memo\n", encoding="utf-8")
+        (self.tmp / "config").mkdir()
+        for f in ("categories.toml", "settings.toml"):
+            shutil.copy(BASE / "config" / f, self.tmp / "config" / f)
+        (self.tmp / "reports").mkdir()
+        d = json.loads(json.dumps(SEARCH))
+        d["markets"] = ["coupang", "naver"]
+        d["items"][0]["quotes"].append({"market": "naver", "recommended_price": 170900, "margin": 20250})
+        (self.tmp / "reports" / "search.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        latest = {"ok": True, "error": None, "run_at": "2026-11-20T16:42:00", "demo": False,
+                  "markets": ["coupang", "naver"], "items": [dict(d["items"][0], id="SBTQ041", kind="고정")]}
+        (self.tmp / "reports" / "latest.json").write_text(json.dumps(latest, ensure_ascii=False), encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_url_encodes_keyword(self):
+        from core import naver_low
+        self.assertEqual(naver_low.search_url("GAC-2500 3AJF&x"),
+                         "https://search.shopping.naver.com/search/all?query=GAC-2500%203AJF%26x")
+        self.assertEqual(naver_low.link_keyword({"must_include": "SBTQ041|X", "name": "세이코"}), "SBTQ041")
+        self.assertEqual(naver_low.link_keyword({"must_include": "", "name": "AI안경 (카메라·번역)"}), "AI안경")
+
+    def test_link_without_value(self):
+        page = W.render(self.tmp)
+        self.assertIn("search.shopping.naver.com/search/all?query=SBTQ043", page)   # 직접 검색: 모델명
+        self.assertIn("search.shopping.naver.com/search/all?query=SBTQ041", page)   # 감시: 필수 단어
+        self.assertIn("네이버 최저가 미입력", page)
+        self.assertIn('data-act="naverlow" data-id="SBTQ041"', page)
+
+    def test_save_show_compare_and_delete(self):
+        code, out = W.naver_low_request({"id": "SBTQ041", "price": "165,000", "memo": "A샵 무료배송"}, self.tmp)
+        self.assertEqual(code, 200)
+        self.assertEqual(out["saved"]["price"], "165000")
+        page = W.render(self.tmp)
+        self.assertIn("네이버 최저가 165,000원", page)
+        self.assertIn("권장가가 4% 높음", page)                  # 170,900 vs 165,000
+        self.assertIn("메모: A샵 무료배송", page)
+        self.assertEqual(W.naver_low_request({"id": "SBTQ041", "price": ""}, self.tmp)[0], 200)
+        self.assertIn("네이버 최저가 미입력", W.render(self.tmp))
+
+    def test_stale_after_max_days(self):
+        from datetime import date, timedelta
+        old = (date.today() - timedelta(days=31)).isoformat()
+        (self.tmp / "catalog" / "naver_prices.csv").write_text(f"id,price,checked,memo\nSBTQ041,160000,{old},\n",
+                                                                encoding="utf-8")
+        self.assertIn("다시 확인 필요 (31일 전)", W.render(self.tmp))
+
+    def test_rejects_bad_input(self):
+        self.assertEqual(W.naver_low_request({"id": "nope", "price": "1000"}, self.tmp)[0], 404)
+        self.assertEqual(W.naver_low_request({"id": "SBTQ041", "price": "abc"}, self.tmp)[0], 400)
+        self.assertEqual(W.naver_low_request({"id": "SBTQ041", "price": "0"}, self.tmp)[0], 400)
+
+
 if __name__ == "__main__":
     unittest.main()

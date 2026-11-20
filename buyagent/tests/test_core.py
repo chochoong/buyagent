@@ -12,6 +12,7 @@ import copy
 import csv
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -593,6 +594,23 @@ class TestNaver(unittest.TestCase):
 
     def tearDown(self):
         self.s.close()
+
+    def test_env_conf_reads_dotenv(self):
+        from core.naver import env_conf
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            (tmp / ".env").write_text("NAVER_CLIENT_ID=abc\nNAVER_CLIENT_SECRET=xyz\n", encoding="utf-8")
+            saved = {k: os.environ.pop(k, None) for k in ("NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET")}
+            try:
+                c = env_conf(tmp, {"api_base": "http://x"})
+                self.assertEqual((c["client_id"], c["client_secret"], c["api_base"]), ("abc", "xyz", "http://x"))
+            finally:
+                for k, v in saved.items():
+                    os.environ.pop(k, None)
+                    if v is not None:
+                        os.environ[k] = v
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_trend(self):
         from core.naver import sparkline, trend_change

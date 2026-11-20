@@ -32,7 +32,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from core.config import load_config                       # noqa: E402
-from core.naver import Naver, sparkline, trend_change      # noqa: E402
+from core.naver import Naver, env_conf, sparkline, trend_change      # noqa: E402
 
 
 def main() -> None:
@@ -51,9 +51,9 @@ def main() -> None:
         sys.exit("키워드를 넣어 주세요. 예: python research.py 키캡 손목받침")
 
     cfg = load_config(BASE)
-    nv = Naver(cfg.get("naver", {}))
+    nv = Naver(env_conf(BASE, cfg.get("naver", {})))
     if not nv.ready():
-        sys.exit("네이버 키 없음 → config/settings.local.toml 의 [naver] client_id / client_secret 을 넣으세요.\n"
+        sys.exit("네이버 키 없음 → buyagent/.env 에 NAVER_CLIENT_ID=… / NAVER_CLIENT_SECRET=… 을 넣으세요.\n"
                  "발급: 네이버 클라우드 플랫폼 콘솔 → NAVER API HUB → Application 등록 (검색어 트렌드)")
     try:
         data = nv.trend(keywords, args.months)

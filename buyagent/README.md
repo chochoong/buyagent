@@ -137,7 +137,7 @@ python research.py 키캡 손목받침 장패드 기계식키보드
 
 키워드마다 최근 12개월 월별 검색량 그래프, 가장 많이 찾는 달, 최근 3개월 증감을 보여줘요. 한 번에 5개씩 묶어서 조회해서, 같은 묶음 안에서는 어느 키워드가 더 많이 검색되는지도 비교할 수 있어요.
 
-- **키 발급:** 네이버 클라우드 플랫폼(https://www.ncloud.com) 가입 → 콘솔 → **NAVER API HUB** → Application 등록에서 **검색어 트렌드**를 골라요. 발급된 Client ID와 Client Secret을 `settings.local.toml`의 `[naver]`에 넣어요.
+- **키 발급:** 네이버 클라우드 플랫폼(https://www.ncloud.com) 가입 → 콘솔 → **NAVER API HUB** → Application 등록에서 **검색어 트렌드**를 골라요. 발급된 Client ID와 Client Secret은 `buyagent/.env`에 `NAVER_CLIENT_ID=…`, `NAVER_CLIENT_SECRET=…`로 넣어요 (코드·로그·커밋에 쓰지 않음).
 - **가격은 못 가져와요:** 네이버 쇼핑 검색 API(상품·가격)는 **2026년 7월 31일에 종료**됐고 대체 API가 없어요. 국내 판매가는 `sourcing.csv`의 `price_coupang`, `price_naver`에 직접 적어 주세요.
 
 ### API 없는 쇼핑몰 가격 직접 입력 (키보드 구매대행 등)

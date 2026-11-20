@@ -6,17 +6,29 @@
 키 발급 (네이버 클라우드 플랫폼, https://www.ncloud.com)
   콘솔 → Services → Application Services → NAVER API HUB → Application 등록
   → '검색어 트렌드' API 선택 → [인증 정보]의 Client ID / Client Secret
-  → config/settings.local.toml 의 [naver] client_id / client_secret
+  → buyagent/.env 의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET (코드·로그·커밋에 쓰지 않음)
 
 API 문서: https://api.ncloud-docs.com/docs/naver-api-hub-search-trend
 """
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
+from pathlib import Path
 
 from .http import post_json
 
 HUB = "https://naverapihub.apigw.ntruss.com"
+
+
+def env_conf(base: Path, conf: dict | None = None) -> dict:
+    """.env 의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 를 conf 에 넣어 돌려줌 (api_base 등 다른 설정은 그대로)"""
+    from .translate import load_dotenv
+    load_dotenv(base / ".env")
+    out = dict(conf or {})
+    out["client_id"] = os.environ.get("NAVER_CLIENT_ID", "").strip()
+    out["client_secret"] = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+    return out
 
 
 class Naver:
