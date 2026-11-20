@@ -1176,6 +1176,17 @@ class TestEbay(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             self.src.search(Query("x"))
         self.assertIn("client authentication failed", str(cm.exception))
+        import io as _io
+        import urllib.error
+
+        def raise_401(i, s):
+            raise urllib.error.HTTPError("u", 401, "Unauthorized", {},
+                                         _io.BytesIO(b'{"error":"invalid_client","error_description":"client authentication failed"}'))
+        self.src.token_request = raise_401
+        with self.assertRaises(RuntimeError) as cm:
+            self.src.search(Query("x"))
+        self.assertIn("HTTP 401 client authentication failed", str(cm.exception))
+        self.assertIn("Production 키셋", str(cm.exception))
 
     def test_explicit_only_and_us_forwarder_pricing(self):
         from core.fx import FX

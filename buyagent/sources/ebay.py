@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -111,6 +112,14 @@ class Ebay(Source):
         k = self.keys()
         try:
             d = self.token_request(k["EBAY_CLIENT_ID"], k["EBAY_CLIENT_SECRET"])
+        except urllib.error.HTTPError as e:     # eBay 가 준 이유(error_description)를 그대로 보여 줌
+            try:
+                why = json.loads(e.read().decode("utf-8", "replace")).get("error_description", "")
+            except (ValueError, OSError, AttributeError):
+                why = ""
+            hint = (" → developer.ebay.com 에서 Production 키셋이 켜져 있는지(계정 삭제 알림 설정/면제 완료), "
+                    "App ID·Cert ID 를 정확히 복사했는지 확인" if e.code == 401 else "")
+            raise RuntimeError(f"이베이 토큰 발급 실패 HTTP {e.code} {why}{hint}".strip()) from e
         except Exception as e:
             raise RuntimeError(f"이베이 토큰 발급 실패 ({type(e).__name__}) → .env 의 EBAY_CLIENT_ID/SECRET 확인") from e
         tok = str(d.get("access_token") or "")
