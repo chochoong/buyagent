@@ -41,7 +41,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from core import naver_low
+from core import name_ko, naver_low
 from core.pause import paused_since, set_paused
 from core.shipping_rates import SIZES, checked_dates, stale_messages, update_rates
 
@@ -452,6 +452,38 @@ def cost_cell(it: dict) -> str:
 STATUS = {"ok": ("판매 가능", "ok"), "blocked": ("차단", "bad"), "no_offer": ("판매처 없음", "warn"), "error": ("오류", "bad")}
 
 
+AUTO_NAME_KO = True          # 화면을 그릴 때 한국어 풀이가 없는 상품명을 뒤에서 번역 (테스트는 끔)
+_NAME_JOB = {"running": False, "tried": set()}
+_NAME_LOCK = threading.Lock()
+
+
+def start_name_fill(base: Path, names) -> bool:
+    """한국어 풀이가 없는 상품명을 뒤에서 번역 시작. 이미 돌고 있거나, 이번 서버 실행 중 실패한 이름뿐이면 False"""
+    if not AUTO_NAME_KO or not name_ko.ready(base):
+        return False
+    with _NAME_LOCK:
+        todo = [n for n in name_ko.missing(base, names) if n not in _NAME_JOB["tried"]]
+        if _NAME_JOB["running"] or not todo:
+            return False
+        _NAME_JOB["running"] = True
+        _NAME_JOB["tried"].update(todo)              # 실패해도 다시 부르지 않음 (서버를 다시 켜면 재시도)
+
+    def work():
+        try:
+            name_ko.fill(base, todo)
+        finally:
+            with _NAME_LOCK:
+                _NAME_JOB["running"] = False
+    threading.Thread(target=work, daemon=True).start()
+    return True
+
+
+def name_cell(name, ko: dict, n: int) -> str:
+    """상품명 + (한국어 풀이). 한국어 풀이는 화면 표시용"""
+    k = ko.get(name or "")
+    return clip(name, n) + (f' <span class="muted">({e(k)})</span>' if k else "")
+
+
 def naver_cell(kw: str, st: dict | None, rec, pid: str = "") -> str:
     """스마트스토어 권장가 아래: [네이버 최저가 보기] 링크 + 사람이 적은 최저가 (자동 수집 아님)"""
     out = '<div class="small">' + link(naver_low.search_url(kw), "네이버 최저가 보기 ↗") + "</div>" if kw else ""
@@ -474,7 +506,7 @@ def naver_cell(kw: str, st: dict | None, rec, pid: str = "") -> str:
 
 
 def result_rows(items: list[dict], markets: list[str], names: dict[str, str], numbered: bool,
-                naver=None) -> tuple[list[str], list]:
+                naver=None, ko: dict | None = None) -> tuple[list[str], list]:
     """naver(it) → (검색어, 적은 값 상태, 상품 ID) — 스마트스토어 칸 아래 네이버 최저가 표시용"""
     heads = (["#"] if numbered else []) + ["상품", "판정", "최저가 판매처", "현지가", "개당 원가"] \
         + [f"{names.get(m, m)} 권장가" for m in markets] + ["경고·알림"]
@@ -495,7 +527,7 @@ def result_rows(items: list[dict], markets: list[str], names: dict[str, str], nu
             cells.append(cell)
         why = it.get("blocked_reason")
         rows.append(([str(i)] if numbered else []) + [
-            clip(it.get("name") or it.get("id"), 70) + (f'<div class="small muted">{e(it.get("id"))}</div>' if not numbered else ""),
+            name_cell(it.get("name") or it.get("id"), ko or {}, 70) + (f'<div class="small muted">{e(it.get("id"))}</div>' if not numbered else ""),
             f'<span class="{cls}">{e(label)}</span>' + (f'<div class="small">{clip(why, 50)}</div>' if why else ""),
             link(o.get("url"), o.get("shop") or o.get("source") or "판매처") if o else '<span class="muted">–</span>',
             (money(o.get("price"), o.get("currency")) + ship) if o else "",
@@ -513,6 +545,9 @@ def render(base: Path = BASE) -> str:
     _, prices = read_csv(base / "catalog" / "manual_prices.csv")
 
     cfg = settings(base)
+    all_names = [str(it.get("name") or "") for d in (search, latest) for it in ((d or {}).get("items") or [])]         + [str(p.get("name") or "") for p in products]
+    ko = name_ko.lookup(base, all_names)
+    ko_pending = start_name_fill(base, all_names)
     banner, rbody = rates_section(cfg)
     lows, low_days = naver_low.load(base), naver_low.max_days(cfg)
     by_id = {(p.get("id") or "").strip(): p for p in products}
@@ -545,7 +580,7 @@ def render(base: Path = BASE) -> str:
     else:
         s_kw = suggest_must(last).split("|")[0].strip() or last.get("keyword_original") or last.get("keyword") or ""
         heads, rows = result_rows(search.get("items") or [], search.get("markets") or [], names, True,
-                                  lambda it: (s_kw, None, ""))
+                                  lambda it: (s_kw, None, ""), ko)
         excl = search.get("excluded") or {}
         watched = any((p.get("keyword") or "").strip() == last.get("keyword") for p in products)
         add = ('<span class="muted small">이 검색어는 이미 감시 중</span>' if watched else
@@ -569,7 +604,7 @@ def render(base: Path = BASE) -> str:
     elif not latest:
         lbody = '<p class="muted">아직 감시를 실행한 적이 없어요. [시험 실행]을 누르거나 python main.py 를 실행하세요.</p>'
     else:
-        heads, rows = result_rows(latest.get("items") or [], latest.get("markets") or [], names, False, watch_naver)
+        heads, rows = result_rows(latest.get("items") or [], latest.get("markets") or [], names, False, watch_naver, ko)
         lbody = (f'<p class="small">{e((latest.get("run_at") or latest.get("generated_at") or "")[:16].replace("T", " "))} 실행'
                  + (" · 예시 데이터(--demo)" if latest.get("demo") else "")
                  + (f' · <span class="bad">실패: {e(latest.get("error"))}</span>' if not latest.get("ok") else "")
@@ -583,7 +618,7 @@ def render(base: Path = BASE) -> str:
         tag = ('<span class="tag pipe">공급처 발굴에서</span> ' if FROM_SOURCING in memo else
                '<span class="tag srch">직접 검색에서</span> ' if FROM_SEARCH in memo else "")
         hub = (p.get("hub_product_id") or "").strip()
-        prow.append([e(p.get("id")), clip(p.get("name"), 50) + (f' <span class="small muted">#{e(hub)}</span>' if hub else ""),
+        prow.append([e(p.get("id")), name_cell(p.get("name"), ko, 50) + (f' <span class="small muted">#{e(hub)}</span>' if hub else ""),
                      e(cats.get(p.get("category"), {}).get("name", p.get("category"))), clip(p.get("keyword"), 40),
                      e(p.get("sources") or "기본"),
                      f'<button class="sm" data-act="toggle" data-id="{e(p.get("id"))}">{"켜짐 ✓" if on else "꺼짐"}</button>',
@@ -603,7 +638,8 @@ def render(base: Path = BASE) -> str:
 
     return PAGE.format(
         css=CSS, js=JS, form=form, sbody=sbody, lbody=lbody, pbody=pbody, mbody=mbody, banner=banner, rbody=rbody,
-        n_products=len(products), n_prices=len(prices), base=e(base))
+        n_products=len(products), n_prices=len(prices), base=e(base),
+        kop="true" if ko_pending else "false")
 
 
 CSS = """
@@ -697,6 +733,14 @@ document.addEventListener("click", function (ev) {
   }
 });
 poll();
+function waitNames() {   // 상품명 한국어 풀이를 뒤에서 만드는 중 → 끝나면 한 번 새로고침 (입력 중이면 안 함)
+  api("/api/names").then(function (d) {
+    if (d.running) { setTimeout(waitNames, 3000); return; }
+    var a = document.activeElement;
+    if (!watching && !(a && (a.tagName === "INPUT" || a.tagName === "SELECT"))) location.reload();
+  }).catch(function () {});
+}
+if (KO_PENDING) setTimeout(waitNames, 3000);
 """
 
 PAGE = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
@@ -712,7 +756,7 @@ PAGE = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <section><h2>배대지 요금 <span class="small muted">개당 원가에 들어가는 배대지·국제배송비 · config/settings.toml</span></h2>{rbody}</section>
 <section><h2>수동 가격 <span class="small muted">{n_prices}줄 · catalog/manual_prices.csv</span></h2>{mbody}</section>
 </main><div id="job" hidden></div>
-<script>{js}</script></body></html>"""
+<script>var KO_PENDING = {kop};{js}</script></body></html>"""
 
 
 # ---------------------------------------------------------------- 서버
@@ -743,6 +787,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/":
             return self._send(200, render(self.base), "text/html; charset=utf-8")
+        if path == "/api/names":
+            with _NAME_LOCK:
+                return self._send(200, {"running": _NAME_JOB["running"]})
         if path == "/api/job":
             with LOCK:
                 return self._send(200, job_view(dict(JOB)))

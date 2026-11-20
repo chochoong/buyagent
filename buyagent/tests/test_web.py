@@ -20,6 +20,8 @@ sys.path.insert(0, str(BASE))
 
 import web as W  # noqa: E402
 
+W.AUTO_NAME_KO = False      # 테스트에서는 실제 번역 API 를 부르지 않음
+
 SEARCH = {
     "ok": True, "error": None, "run_at": "2026-11-18T10:44:00",
     "query": {"keyword": "セイコー SBTQ043", "category": "watch", "must_include": ["SBTQ043"],
@@ -353,6 +355,70 @@ class NaverLowTest(unittest.TestCase):
         self.assertEqual(W.naver_low_request({"id": "nope", "price": "1000"}, self.tmp)[0], 404)
         self.assertEqual(W.naver_low_request({"id": "SBTQ041", "price": "abc"}, self.tmp)[0], 400)
         self.assertEqual(W.naver_low_request({"id": "SBTQ041", "price": "0"}, self.tmp)[0], 400)
+
+
+class NameKoTest(unittest.TestCase):
+    """상품명 옆 (한국어) — 번역 함수는 가짜"""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        shutil.copytree(BASE / "catalog", self.tmp / "catalog")
+        (self.tmp / "config").mkdir()
+        for f in ("categories.toml", "settings.toml"):
+            shutil.copy(BASE / "config" / f, self.tmp / "config" / f)
+        (self.tmp / "reports").mkdir()
+        (self.tmp / "reports" / "search.json").write_text(json.dumps(SEARCH, ensure_ascii=False), encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_needs(self):
+        from core.name_ko import needs
+        self.assertTrue(needs("セイコー SBTQ041"))
+        self.assertTrue(needs("空气炸锅"))
+        self.assertTrue(needs("Seiko Men's Watch"))
+        self.assertFalse(needs("GAC-2500-3AJF"))              # 모델 번호만
+        self.assertFalse(needs("세이코 SBTQ041"))              # 이미 한국어
+        self.assertFalse(needs(""))
+
+    def test_fill_cache_and_render(self):
+        from core import name_ko
+        calls = []
+
+        def fake(names, base):
+            calls.append(names)
+            return json.dumps(["세이코 SBTQ041 <정품>" if "SBTQ041" in n else "번역" for n in names], ensure_ascii=False)
+        names = ["セイコー SBTQ041 <正規品>", "GAC-2500-3AJF"]
+        self.assertEqual(name_ko.fill(self.tmp, names, fake), 1)
+        self.assertEqual(calls, [["セイコー SBTQ041 <正規品>"]])  # 모델 번호만인 이름은 안 보냄
+        self.assertEqual(name_ko.fill(self.tmp, names, fake), 0)   # 캐시 → 다시 안 부름
+        self.assertEqual(len(calls), 1)
+        page = W.render(self.tmp)
+        self.assertIn("セイコー SBTQ041 &lt;正規品&gt; <span class=\"muted\">(세이코 SBTQ041 &lt;정품&gt;)</span>", page)
+
+    def test_bad_answer_is_skipped(self):
+        from core import name_ko
+        for raw in ("not json", json.dumps(["a", "b"]), json.dumps(["no hangul"])):
+            self.assertEqual(name_ko.fill(self.tmp, ["セイコー"], lambda n, b, r=raw: r), 0)
+        self.assertEqual(name_ko.lookup(self.tmp, ["セイコー"]), {})
+
+    def test_background_start_once(self):
+        from core import name_ko
+        W.AUTO_NAME_KO = True
+        old_fill, old_ready, done = name_ko.fill, name_ko.ready, threading.Event()
+        name_ko.fill = lambda base, names, call=None: done.set() or 0
+        name_ko.ready = lambda base: False
+        try:
+            self.assertFalse(W.start_name_fill(self.tmp, ["セイコー"]))   # 키 없으면 시작 안 함 (재시도 목록에도 안 넣음)
+            name_ko.ready = lambda base: True
+            W._NAME_JOB["tried"].clear()
+            self.assertTrue(W.start_name_fill(self.tmp, ["セイコー"]))
+            self.assertTrue(done.wait(5))
+            time.sleep(0.1)
+            self.assertFalse(W.start_name_fill(self.tmp, ["セイコー"]))   # 실패한 이름은 다시 안 부름
+        finally:
+            name_ko.fill, name_ko.ready = old_fill, old_ready
+            W.AUTO_NAME_KO = False
+            W._NAME_JOB["tried"].clear()
 
 
 if __name__ == "__main__":
