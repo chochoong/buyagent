@@ -19,6 +19,8 @@ hits = 30
 default_shipping = 800       # 배송비 별도 상품의 가정 배송비 (엔)
 min_interval = 1.1           # 호출 간격(초). 라쿠텐은 초당 1회 제한
 retries = 2                  # 429·5xx·네트워크 오류 시 재시도 횟수
+overseas_first = true        # 해외배송 상품을 먼저 한 번 더 조회 (shipOverseasFlag=1) → '해외배송 가능'으로 표시
+ship_overseas_area = "KR"    # shipOverseasArea 값 (비우면 지역 조건 없이). 2026-11-24 미검증 → 키 받으면 응답으로 확인
 
 [sources.rakuten_web]         # API 키 없이 라쿠텐 검색 페이지를 읽음 (PC의 크롬을 화면 없이 실행)
 enabled = true
@@ -97,6 +99,14 @@ JP = ""                      # 위 small/medium/large 는 2026-11-16 추정값 �
 [shipping_hints.JP]            # 상품명·설명에 이 말이 있으면 '소형 배송일 수 있음' 알림 (계산값은 안 바꿈)
 # 일본 우편함 배송: 두께 약 3cm·1kg 이하 (2026-11-19 기준, 운송사 규격은 바뀔 수 있음)
 small_keywords = ["メール便", "M便", "ネコポス", "ゆうパケット", "クリックポスト", "定形外", "ポスト投函", "レターパック"]
+# 상품명·설명에 이 말이 있으면 '판매자 해외배송 가능'으로 보고 직배송 요금(아래 shipping_direct)과 배대지 중 싼 쪽으로 계산 (대소문자 무시)
+overseas_keywords = ["海外発送", "海外配送", "International Shipping", "Worldwide"]
+
+[shipping_direct.JP]          # 판매자가 한국으로 직접 보낼 때 국제 배송비 (원, 1건). 일본 내 배송비·국내 택배 대신 이 값
+# 2026-11-24 추정값 (일본우편 국제 소형포장물·EMS 수준, 판매자마다 다름) → 판매자 페이지의 한국 배송비로 확인 후 고치기
+small = 11000                # ~0.5kg
+medium = 30000               # ~2kg
+large = 50000                # ~5kg
 
 [shipping_profiles.US]
 small = 18000

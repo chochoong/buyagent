@@ -24,7 +24,8 @@ def fmt_result(r: Result, indent: str = "  ") -> list[str]:
         lines.append(f"{indent}최저가: {o.price:,.0f} + 배송 {ship} = {o.total:,.0f} {o.currency} "
                      f"[{o.source} · {o.shop}]")
         b = f", {r.bundle_size}개 묶음 기준" if r.bundle_size > 1 else ""
-        lines.append(f"{indent}개당 원가: {r.cost_krw:,}원 (배대지 {r.forwarding_krw:,}원 포함 · 개당 ${r.goods_usd}{b})")
+        via = "판매자 직배송 추정" if r.ship_route == "direct" else "배대지"
+        lines.append(f"{indent}개당 원가: {r.cost_krw:,}원 ({via} {r.forwarding_krw:,}원 포함 · 개당 ${r.goods_usd}{b})")
         for q in r.quotes:
             s = f"{indent}[{q.market}] 권장가 {q.recommended_price:,}원 → 마진 {q.margin:,}원"
             if q.my_price:
@@ -99,6 +100,8 @@ def result_json(kind: str, r: Result) -> dict:
         "cost_krw": r.cost_krw if o and r.cost_krw else None,
         "forwarding_krw": r.forwarding_krw if o and r.cost_krw else None,   # 개당 원가에 들어간 배대지·국제배송비
         "shipping_profile": r.shipping_profile or None,
+        "ship_route": r.ship_route if o and r.cost_krw else None,   # forwarder(배대지) / direct(판매자 해외배송)
+        "ship_overseas": (o.overseas or None) if o else None,       # 해외배송 가능 근거: api / 표시:<단어>
         "quotes": [{"market": q.key or q.market, "recommended_price": q.recommended_price,
                     "margin": q.margin, "my_price": q.my_price, "my_margin": q.my_margin}
                    for q in r.quotes],

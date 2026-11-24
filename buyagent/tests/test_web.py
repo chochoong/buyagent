@@ -298,6 +298,18 @@ class WebTest(unittest.TestCase):
         self.assertEqual(self.call(url + "/api/search", {"query": "x", "category": "watch"})[0], 409)
 
 
+class OverseasCellTest(unittest.TestCase):
+    def test_cost_cell_direct_and_hint(self):
+        it = {"cost_krw": 20000, "forwarding_krw": 11000, "shipping_profile": "small", "ship_route": "direct",
+              "ship_overseas": "api", "best_offer": {"shipping_known": True, "shipping": 0}}
+        html_ = W.cost_cell(it)
+        self.assertIn("판매자 직배송 추정 11,000원 포함", html_)
+        self.assertIn("해외배송 가능", html_)
+        it.update(ship_route="forwarder", ship_overseas="표시:海外発送")
+        self.assertIn("해외배송 표시", W.cost_cell(it))
+        self.assertIn("yahoo", W.SEARCH_MARKETS)
+
+
 class NaverLowTest(unittest.TestCase):
     """네이버 최저가: 링크 + 사람이 적은 값 (자동 수집 없음)"""
     def setUp(self):

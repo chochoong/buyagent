@@ -56,6 +56,12 @@ from core.validate import ERROR, validate                  # noqa: E402
 from sources import REGISTRY, build_sources                # noqa: E402
 
 
+def rank(r: Result) -> tuple:
+    """정렬: 개당 원가 → 같으면 판매자 해외배송 가능(직배송 > 표시만) 먼저"""
+    o = r.offer
+    return (r.cost_krw, 0 if r.ship_route == "direct" else 1 if (o and o.overseas) else 2)
+
+
 class Runner:
     def __init__(self, cfg: dict, demo: bool, bundle: int):
         self.cfg, self.demo, self.bundle = cfg, demo, bundle
@@ -113,7 +119,7 @@ class Runner:
         (현지가만 비교하면 일본·미국처럼 배송비가 다른 나라를 섞을 때 틀림)"""
         cands = [self.priced(spec, o) for o in offers]
         good = [r for r in cands if r.cost_krw > 0]
-        return min(good, key=lambda r: r.cost_krw) if good else cands[0]
+        return min(good, key=rank) if good else cands[0]
 
     def run_product(self, spec: Spec, track: bool = True) -> Result:
         res = Result(spec=spec)
@@ -312,7 +318,8 @@ def model_words(keyword: str) -> list[str]:
 TRANSLATE_CALL = None       # 테스트에서 가짜 번역 함수로 바꿈 (None = 실제 Claude 호출)
 # --search --market 값 (trade_hub 사이트 선택과 같은 값). sources=None 이면 일반 검색 소스 전부(라쿠텐·야후)
 SEARCH_MARKETS = {
-    "rakuten": {"name": "라쿠텐(일본)", "lang": "ja", "sources": None},
+    "rakuten": {"name": "라쿠텐(일본)", "lang": "ja", "sources": None, "skip": ["yahoo"]},
+    "yahoo": {"name": "야후 쇼핑(일본)", "lang": "ja", "sources": ["yahoo"]},
     "aliexpress": {"name": "알리익스프레스(중국)", "lang": "en", "sources": ["aliexpress"]},
     "ebay": {"name": "이베이(미국)", "lang": "en", "sources": ["ebay"]},
 }
@@ -345,7 +352,7 @@ def search(cfg: dict, args) -> int:
     must = [w for w in args.must.split("|") if w.strip()] if args.must else model_words(keyword)
     excl = ([w for w in args.exclude.split("|") if w.strip()] if args.exclude
             else list(cats[args.category].get("search_exclude", [])))
-    if args.market != "rakuten" and not args.exclude:
+    if mk["lang"] != "ja" and not args.exclude:
         excl = []                       # 카테고리 search_exclude 는 일본어 단어 → 다른 언어 사이트엔 안 맞음
     spec = Spec(id="search", name=keyword, category=args.category, keyword=keyword, must_include=must,
                 exclude=excl, sources=list(mk["sources"] or []))
@@ -357,11 +364,17 @@ def search(cfg: dict, args) -> int:
     print(f"\n[직접 검색] {keyword}  ({mk['name']}, 카테고리: {category_label(cfg, args.category)}"
           + (f", 필수 단어: {'·'.join(must)}" if must else "") + ")")
     print(f"소스: {', '.join(spec.sources or run.search_sources() or run.sources) or '없음'}")
+    if mk.get("skip") and not spec.sources and not run.demo:   # 라쿠텐 = 일본 일반 소스 중 야후 빼고 (야후는 따로)
+        spec.sources = [n for n in run.search_sources() if n not in mk["skip"]]
     missing = [n for n in spec.sources if n not in run.sources and not run.demo]
     if missing:                          # 키 없음 → 검색하지 않고 실패로 기록 (빈 결과를 '상품 없음'으로 오해하지 않게)
-        keys = getattr(REGISTRY.get(missing[0]), "env_keys", ())
-        problem = f"{mk['name']} 검색 불가: " + (f"키 없음 → buyagent/.env 에 {', '.join(keys)} 입력" if keys
-                                                  else f"소스 {', '.join(missing)} 꺼짐 (settings.toml)")
+        cls = REGISTRY.get(missing[0])
+        keys = getattr(cls, "env_keys", ())
+        conf_keys = getattr(cls, "required_keys", ())
+        problem = f"{mk['name']} 검색 불가: " + (
+            f"키 없음 → buyagent/.env 에 {', '.join(keys)} 입력" if keys else
+            f"키 없음 → config/settings.local.toml [sources.{missing[0]}] 에 {', '.join(conf_keys)} 입력" if conf_keys
+            else f"소스 {', '.join(missing)} 꺼짐 (settings.toml)")
         write_search(out, problem, query, markets, [], {}, 0)
         print(f"  ❌ {problem}")
         return 1
@@ -374,7 +387,7 @@ def search(cfg: dict, args) -> int:
     offers, errors, skipped = run.fetch(spec, newest=False)
     excluded: dict[str, int] = {}
     ok = [o for o in filter_offers(cfg, offers, spec, excluded) if o.in_stock]
-    results = sorted((r for r in (run.priced(spec, o) for o in ok) if r.cost_krw > 0), key=lambda r: r.cost_krw)
+    results = sorted((r for r in (run.priced(spec, o) for o in ok) if r.cost_krw > 0), key=rank)
     if len(results) >= 3:       # 중간값보다 훨씬 싸면 부속품·다른 모델일 가능성 → 표시만 (빼지는 않음)
         mid = results[len(results) // 2].cost_krw
         for r in results:

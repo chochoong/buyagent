@@ -847,7 +847,8 @@ class TestLatestJson(TmpDirTest):
         self.assertTrue(d["ok"] and d["demo"])
         self.assertEqual(d["markets"], list(CFG["markets"]))
         keys = {"kind", "id", "hub_product_id", "name", "category", "status", "blocked_reason",
-                "best_offer", "cost_krw", "forwarding_krw", "shipping_profile", "quotes", "warnings", "events", "notice"}
+                "best_offer", "cost_krw", "forwarding_krw", "shipping_profile", "ship_route", "ship_overseas",
+                "quotes", "warnings", "events", "notice"}
         offer_keys = {"source", "shop", "url", "price", "shipping", "shipping_known", "currency", "in_stock"}
         self.assertTrue(d["items"])
         for it in d["items"]:
@@ -1294,6 +1295,83 @@ class TestAliToken(unittest.TestCase):
         self.assertNotIn("R1", " ".join(m))                                 # 토큰 값은 문장에 안 씀
         self.assertEqual(self.T.keep_fresh(self.tmp, "k", "s", self.NOW, self.ok), [])      # 갱신 성공
         self.assertIn("없음", self.T.keep_fresh(self.tmp, "", "", self.NOW, self.ok)[0])
+
+
+
+class TestOverseasShipping(unittest.TestCase):
+    """판매자 해외배송 가능 → 직배송(추정 요금)과 배대지 중 싼 쪽, 같은 원가면 해외배송 먼저"""
+
+    def setUp(self):
+        from core.fx import FX
+        self.cfg = load_config(BASE)
+        self.fx = FX(self.cfg, True)
+
+    def price(self, offer, profile="small", category="stationery"):
+        from core.pricing import price_offer
+        r = Result(spec=Spec(id="x", name="x", category=category, keyword="x", shipping_profile=profile))
+        price_offer(self.cfg, self.fx, r, offer)
+        return r
+
+    def offer(self, name="ノート", text="", price=1000, shipping=800, overseas=""):
+        return Offer(source="rakuten", key=name, name=name, price=price, currency="JPY", origin="JP",
+                     shipping=shipping, text=text, overseas=overseas)
+
+    def test_keyword_detect_case_insensitive(self):
+        from core.pricing import overseas_hint
+        self.assertEqual(overseas_hint(self.cfg, self.offer(text="international shipping OK")),
+                         "표시:International Shipping")
+        self.assertEqual(overseas_hint(self.cfg, self.offer(name="ノート 海外発送可")), "표시:海外発送")
+        self.assertEqual(overseas_hint(self.cfg, self.offer()), "")
+        self.assertEqual(overseas_hint(self.cfg, self.offer(overseas="api")), "api")
+
+    def test_direct_when_cheaper(self):
+        c, d = self.cfg["costs"], self.cfg["shipping_direct"]["JP"]
+        plain = self.price(self.offer())
+        r = self.price(self.offer(text="海外配送"))
+        self.assertEqual((plain.ship_route, r.ship_route), ("forwarder", "direct"))
+        self.assertEqual(r.forwarding_krw, d["small"])
+        want = int(round(self.fx.to_krw(1000, "JPY") * (1 + c["card_fx_fee_rate"]) + d["small"]
+                         + c["packaging_krw"] + r.est_duty_krw))       # 일본 내 배송비 800엔·국내 택배 없음
+        self.assertEqual(r.cost_krw, want)
+        self.assertLess(r.cost_krw, plain.cost_krw)
+        self.assertTrue(any("판매자 직배송 추정" in a for a in r.alerts))
+        self.assertFalse(any("소형 배송일 수 있음" in a for a in r.alerts))
+
+    def test_forwarder_when_direct_is_dearer(self):
+        self.cfg["shipping_direct"]["JP"]["small"] = 999_999
+        r = self.price(self.offer(text="海外発送"))
+        self.assertEqual(r.ship_route, "forwarder")
+        self.assertTrue(any("배대지 기준으로 계산" in a for a in r.alerts))
+
+    def test_rank_prefers_overseas_on_tie(self):
+        a, b = self.price(self.offer("A")), self.price(self.offer("B", overseas="api"))
+        self.cfg["shipping_direct"]["JP"]["small"] = 999_999
+        b = self.price(self.offer("B", overseas="api"))
+        b.cost_krw = a.cost_krw
+        self.assertEqual(sorted([a, b], key=M.rank)[0].offer.name, "B")
+
+    def test_rakuten_overseas_first_merge(self):
+        src = REGISTRY["rakuten"]({**self.cfg["sources"]["rakuten"], "application_id": "id"}, self.cfg)
+        sent = []
+
+        def fake(url, params):
+            sent.append(params)
+            items = [{"itemCode": "s:1", "itemName": "A", "itemPrice": 100, "postageFlag": 0, "availability": 1}]
+            if "shipOverseasFlag" not in params:
+                items.append({"itemCode": "s:2", "itemName": "B", "itemPrice": 90, "postageFlag": 0, "availability": 1})
+            return {"Items": items}
+        src.get = fake
+        offers = src.search(Query("x"))
+        self.assertEqual([(o.key, o.overseas) for o in offers], [("rk:s:1", "api"), ("rk:s:2", "")])   # 중복 1건
+        self.assertEqual((sent[0]["shipOverseasFlag"], sent[0]["shipOverseasArea"]), (1, "KR"))
+        self.assertNotIn("shipOverseasFlag", sent[1])
+        sent.clear()
+        src.search(Query("x", newest=True))
+        self.assertEqual(len(sent), 1)                                  # 신상 발견은 한 번만
+
+    def test_yahoo_market(self):
+        self.assertEqual(M.SEARCH_MARKETS["yahoo"]["sources"], ["yahoo"])
+        self.assertIn("yahoo", M.SEARCH_MARKETS["rakuten"]["skip"])
 
 
 if __name__ == "__main__":

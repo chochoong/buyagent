@@ -51,9 +51,9 @@ DEFAULT_PORT = 8766
 MAX_QUERY = 100
 JOB_TIMEOUT = {"search": 5 * 60, "run": 30 * 60}     # 초
 # 직접 검색 사이트 (main.py SEARCH_MARKETS 와 같은 값) → 감시 추가 때 products.csv sources 칸
-SEARCH_MARKETS = {"rakuten": "라쿠텐(일본·일본어로 검색)", "aliexpress": "알리익스프레스(중국·영어로 검색)",
+SEARCH_MARKETS = {"rakuten": "라쿠텐(일본·일본어로 검색)", "yahoo": "야후 쇼핑(일본·일본어로 검색)", "aliexpress": "알리익스프레스(중국 직배송·영어로 자동 검색)",
                   "ebay": "이베이(미국·영어로 검색)"}
-MARKET_SOURCES = {"rakuten": "", "aliexpress": "aliexpress", "ebay": "ebay"}
+MARKET_SOURCES = {"rakuten": "", "yahoo": "yahoo", "aliexpress": "aliexpress", "ebay": "ebay"}
 PRODUCT_COLS = ["id", "name", "category", "keyword", "jan", "must_include", "exclude", "trusted_shops", "sources",
                 "shipping_profile", "bundle_size", "my_price_coupang", "my_price_naver", "active", "memo",
                 "hub_product_id"]
@@ -441,8 +441,13 @@ def cost_cell(it: dict) -> str:
         return money(cost)
     fwd, prof = it.get("forwarding_krw"), it.get("shipping_profile")
     parts = []
-    if isinstance(fwd, (int, float)):
+    if it.get("ship_route") == "direct" and isinstance(fwd, (int, float)):
+        parts.append(f"판매자 직배송 추정 {money(fwd)} 포함" + (f" ({e(prof)})" if prof else ""))
+    elif isinstance(fwd, (int, float)):
         parts.append(f"배대지 {money(fwd)} 포함" + (f" ({e(prof)})" if prof else "") if fwd else "배대지 없음 (직배송)")
+    if it.get("ship_overseas"):
+        parts.append('<span class="tag ok">해외배송 가능</span>' if it.get("ship_route") == "direct"
+                     else '<span class="tag">해외배송 표시</span>')
     ls = local_ship_text(it.get("best_offer") or {})
     if ls:
         parts.append(ls)

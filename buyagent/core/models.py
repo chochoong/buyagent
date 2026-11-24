@@ -31,6 +31,7 @@ class Offer:
     text: str = ""            # 설명문 등 (JAN 확인용)
     used: bool = False
     notes: list[str] = field(default_factory=list)   # 소스가 붙이는 경고 (예: 가격 확인한 지 오래됨)
+    overseas: str = ""        # 판매자 해외배송 가능 근거: "api"(라쿠텐 해외배송 검색) / "표시:<단어>"(상품명·설명) / ""(모름)
 
     @property
     def total(self) -> float:
@@ -78,6 +79,7 @@ class Result:
     cost_krw: int = 0
     forwarding_krw: int = 0                           # 개당 원가 중 배대지·국제배송비 (+국내배송비) ÷ 묶음수량
     shipping_profile: str = ""                        # small / medium / large
+    ship_route: str = "forwarder"                     # forwarder = 배대지 경유 / direct = 판매자 해외배송(직배송 추정 요금)
     bundle_size: int = 1
     quotes: list[Quote] = field(default_factory=list)
     events: list[str] = field(default_factory=list)   # 이번에 바뀐 것 (품절·재입고·원가 변동) → 항상 알림
