@@ -1030,15 +1030,14 @@ class TestLatestJson(TmpDirTest):
         self.assertEqual(d["items"], [])
 
 
-ALI_OK = {"aliexpress_affiliate_product_query_response": {"resp_result": {"resp_code": 200, "resp_msg": "success",
-    "result": {"current_record_count": 3, "products": {"product": [
-        {"product_id": 1005001, "product_title": "Seiko SBTQ041 Watch", "target_sale_price": "95.50",
-         "target_sale_price_currency": "USD", "target_original_price": "120.00", "shop_name": "Watch Store",
-         "shop_id": 9, "product_detail_url": "https://www.aliexpress.com/item/1005001.html?aff=x"},
-        {"product_id": 1005002, "product_title": "No price", "target_sale_price": "",
-         "target_sale_price_currency": "USD"},
-        {"product_id": 1005003, "product_title": "Other currency", "target_sale_price": "700",
-         "target_sale_price_currency": "CNY"}]}}}}}
+ALI_OK = {"aliexpress_ds_text_search_response": {"code": "00", "data": {"pageIndex": 1, "totalCount": 3, "products": {
+    "selection_search_product": [
+        {"itemId": "1005001", "title": "Seiko  SBTQ041 Watch", "targetSalePrice": "95.50",
+         "targetOriginalPrice": "120.00", "targetOriginalPriceCurrency": "USD", "orders": "129", "score": "4.5",
+         "itemUrl": "//www.aliexpress.com/item/1005001.html?skuId=1&appkey=k"},
+        {"itemId": "1005002", "title": "No price", "targetSalePrice": "", "targetOriginalPriceCurrency": "USD"},
+        {"itemId": "1005003", "title": "Other currency", "targetSalePrice": "700",
+         "targetOriginalPriceCurrency": "CNY"}]}}}}
 
 
 class TestAliExpress(unittest.TestCase):
@@ -1047,8 +1046,8 @@ class TestAliExpress(unittest.TestCase):
     def setUp(self):
         self.cfg = load_config(BASE)
         self.src = REGISTRY["aliexpress"](self.cfg["sources"]["aliexpress"], self.cfg)
-        self.src.keys = lambda: {"ALIEXPRESS_APP_KEY": "k", "ALIEXPRESS_APP_SECRET": "s",
-                                 "ALIEXPRESS_TRACKING_ID": "t"}
+        self.src.keys = lambda: {"ALIEXPRESS_APP_KEY": "k", "ALIEXPRESS_APP_SECRET": "s"}
+        self.src.token = lambda app_key, secret: "TOK"
         self.sent = []
         self.src.request = lambda p: self.sent.append(p) or copy.deepcopy(ALI_OK)
 
@@ -1057,12 +1056,13 @@ class TestAliExpress(unittest.TestCase):
         offers = self.src.search(Query("Seiko SBTQ041"))
         self.assertEqual([o.key for o in offers], ["ali:1005001"])      # 가격 없음·다른 통화는 뺌
         o = offers[0]
-        self.assertEqual((o.price, o.currency, o.origin, o.shop), (95.5, "USD", "CN_DIRECT", "Watch Store"))
-        self.assertEqual(o.url, "https://www.aliexpress.com/item/1005001.html")   # 제휴 추적 파라미터 제거
+        self.assertEqual((o.price, o.currency, o.origin, o.name), (95.5, "USD", "CN_DIRECT", "Seiko SBTQ041 Watch"))
+        self.assertEqual(o.shop, "AliExpress (주문 129 · 평점 4.5)")
+        self.assertEqual(o.url, "https://www.aliexpress.com/item/1005001.html")   # //주소 → https, appkey 제거
         self.assertFalse(o.shipping_known)
         p = self.sent[0]
-        self.assertEqual((p["method"], p["keywords"], p["ship_to_country"], p["tracking_id"]),
-                         ("aliexpress.affiliate.product.query", "Seiko SBTQ041", "KR", "t"))
+        self.assertEqual((p["method"], p["keyWord"], p["countryCode"], p["currency"], p["session"]),
+                         ("aliexpress.ds.text.search", "Seiko SBTQ041", "KR", "USD", "TOK"))
         self.assertEqual(p["sign"], sign({k: v for k, v in p.items() if k != "sign"}, "s"))
 
     def test_sign_known_value(self):
@@ -1076,13 +1076,24 @@ class TestAliExpress(unittest.TestCase):
         from sources.aliexpress import parse_products
         for bad in ({"error_response": {"code": "IncompleteSignature", "msg": "bad sign"}},
                     {"code": "IllegalAccessToken", "message": "x"},
-                    {"aliexpress_affiliate_product_query_response": {"resp_result": {"resp_code": 402,
-                                                                                     "resp_msg": "bad"}}},
+                    {"aliexpress_ds_text_search_response": {"code": "500", "msg": "bad"}},
+                    {"unexpected": 1},
                     []):
             with self.assertRaises(RuntimeError, msg=str(bad)):
                 parse_products(bad)
-        empty = {"aliexpress_affiliate_product_query_response": {"resp_result": {"resp_code": 405}}}
+        empty = {"aliexpress_ds_text_search_response": {"code": "00", "data": {"products": {}}}}
         self.assertEqual(parse_products(empty), [])
+
+    def test_token_error_is_search_failure(self):
+        from core.ali_token import TokenError
+
+        def no_token(app_key, secret):
+            raise TokenError("알리 토큰 없음 → data/get_token.py 로 새 code 를 받아 다시 발급")
+        self.src.token = no_token
+        with self.assertRaises(RuntimeError) as cm:
+            self.src.search(Query("x"))
+        self.assertIn("get_token.py", str(cm.exception))
+        self.assertEqual(self.sent, [])                               # 토큰 없으면 API 를 부르지 않음
 
     def test_explicit_only_and_pricing_without_forwarder(self):
         from core.fx import FX
@@ -1221,6 +1232,69 @@ class TestEbay(unittest.TestCase):
         self.assertEqual(M.SEARCH_MARKETS["ebay"]["lang"], "en")
         self.assertEqual(set(M.SEARCH_MARKETS), set(W.SEARCH_MARKETS))   # 화면과 CLI 값이 같음
         self.assertEqual(W.MARKET_SOURCES["ebay"], "ebay")
+
+
+class TestAliToken(unittest.TestCase):
+    """토큰 자동 갱신 — 가짜 갱신 함수 (실제 호출 없음)"""
+    NOW = 1_800_000_000.0
+
+    def setUp(self):
+        from core import ali_token
+        self.T = ali_token
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "data").mkdir()
+        self.sent = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def write(self, exp_h, rexp_h):
+        tok = {"access_token": "OLD", "refresh_token": "R1", "expire_time": int((self.NOW + exp_h * 3600) * 1000),
+               "refresh_token_valid_time": int((self.NOW + rexp_h * 3600) * 1000), "user_nick": "me"}
+        self.T.path(self.tmp).write_text(json.dumps(tok), encoding="utf-8")
+
+    def ok(self, params):
+        self.sent.append(params)
+        return {"access_token": "NEW", "refresh_token": "R2", "expire_time": int((self.NOW + 24 * 3600) * 1000),
+                "refresh_token_valid_time": int((self.NOW + 48 * 3600) * 1000), "code": "0"}
+
+    def test_fresh_token_used_without_refresh(self):
+        self.write(20, 44)
+        self.assertEqual(self.T.access_token(self.tmp, "k", "s", self.NOW, self.ok), "OLD")
+        self.assertEqual(self.sent, [])
+
+    def test_refresh_when_close_to_expiry(self):
+        self.write(2, 26)
+        self.assertEqual(self.T.access_token(self.tmp, "k", "s", self.NOW, self.ok), "NEW")
+        p = self.sent[0]
+        self.assertEqual((p["app_key"], p["refresh_token"]), ("k", "R1"))
+        self.assertEqual(p["sign"], self.T.sign_system("s", "/auth/token/refresh",
+                                                       {k: v for k, v in p.items() if k != "sign"}))
+        saved = self.T.load(self.tmp)
+        self.assertEqual((saved["access_token"], saved["refresh_token"], saved["user_nick"]), ("NEW", "R2", "me"))
+
+    def test_refresh_failure_keeps_valid_token(self):
+        self.write(2, 26)
+        bad = lambda p: {"code": "IllegalRefreshToken"}                     # noqa: E731
+        self.assertEqual(self.T.access_token(self.tmp, "k", "s", self.NOW, bad), "OLD")   # 아직 유효하면 이번엔 씀
+        self.write(-1, 26)
+        with self.assertRaises(self.T.TokenError):
+            self.T.access_token(self.tmp, "k", "s", self.NOW, bad)
+
+    def test_keep_fresh_messages(self):
+        bad = lambda p: {"code": "X"}                                       # noqa: E731
+        self.assertEqual(self.T.keep_fresh(self.tmp, "k", "s", self.NOW, self.ok), [])      # 토큰 파일 없음 → 조용히
+        self.write(-1, -1)
+        m = self.T.keep_fresh(self.tmp, "k", "s", self.NOW, self.ok)
+        self.assertTrue(m and "get_token.py" in m[0] and "기한 지남" in m[0])
+        self.assertEqual(self.sent, [])
+        self.write(2, 10)
+        m = self.T.keep_fresh(self.tmp, "k", "s", self.NOW, bad)
+        self.assertTrue(m and "갱신이 안 되고 있음" in m[0])
+        self.assertNotIn("R1", " ".join(m))                                 # 토큰 값은 문장에 안 씀
+        self.assertEqual(self.T.keep_fresh(self.tmp, "k", "s", self.NOW, self.ok), [])      # 갱신 성공
+        self.assertIn("없음", self.T.keep_fresh(self.tmp, "", "", self.NOW, self.ok)[0])
+
 
 if __name__ == "__main__":
     unittest.main()

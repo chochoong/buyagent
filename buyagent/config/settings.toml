@@ -43,9 +43,10 @@ enabled = true
 file = "catalog/manual_prices.csv"
 stale_days = 7               # 이 일수보다 오래 확인 안 한 가격은 '재확인' 알림
 
-[sources.aliexpress]          # 알리 공식 제휴 API (python main.py --search ... --market aliexpress 에서만 사용)
-enabled = true               # 키 3개는 여기 말고 buyagent/.env 에: ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET / ALIEXPRESS_TRACKING_ID
-endpoint = "https://api-sg.aliexpress.com/sync"   # 키 받은 뒤 공식 문서로 확인 (2026-11-18 미검증)
+[sources.aliexpress]          # 알리 Open Platform 드롭쉬핑 상품 검색 aliexpress.ds.text.search (--market aliexpress 에서만 사용)
+enabled = true               # 키 2개는 buyagent/.env 에: ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET (제휴 API 는 이 앱에 권한 없음, 2026-11-24)
+                             # 토큰은 data/aliexpress_token.json (data/get_token.py 로 발급, 매시간 감시가 자동 갱신)
+endpoint = "https://api-sg.aliexpress.com/sync"   # 2026-11-24 실제 응답으로 확인
 ship_to = "KR"
 page_size = 40
 default_shipping = 3         # 한국 배송비를 모를 때 가정 (USD). 상품 페이지에서 확인

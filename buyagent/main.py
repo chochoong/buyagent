@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import traceback
 from datetime import datetime
@@ -41,7 +42,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from core import translate                                  # noqa: E402
+from core import ali_token, translate                       # noqa: E402
 from core.config import load_config, load_glossary, load_specs, load_toml  # noqa: E402
 from core.fx import FX                                     # noqa: E402
 from core.models import Offer, Query, Result, Spec         # noqa: E402
@@ -409,6 +410,16 @@ def save_latest(error: str, demo: bool, markets: list[str], rows: list[tuple[str
         print(f"[경고] latest.json 저장 실패: {type(e).__name__}: {e}", file=sys.stderr)
 
 
+def ali_token_messages() -> list[str]:
+    """알리 토큰 자동 갱신 (토큰 파일이 없으면 아무것도 안 함). 실패해도 감시는 계속"""
+    try:
+        translate.load_dotenv(BASE / ".env")
+        return ali_token.keep_fresh(BASE, os.environ.get("ALIEXPRESS_APP_KEY", "").strip(),
+                                    os.environ.get("ALIEXPRESS_APP_SECRET", "").strip())
+    except Exception as e:                  # noqa: BLE001 — 토큰 문제로 감시 전체가 멈추면 안 됨
+        return [f"알리 토큰 확인 중 오류 {type(e).__name__}"]
+
+
 def run_all(cfg: dict, args, specs: list[Spec], all_specs: list[Spec]) -> str:
     """감시 1회 실행. 문제가 있으면 설명 문자열, 없으면 "" 반환"""
     problems: list[str] = []
@@ -443,6 +454,15 @@ def run_all(cfg: dict, args, specs: list[Spec], all_specs: list[Spec]) -> str:
     stale_new = run.store.fresh_alerts("_shipping_rates", stale)
     if stale_new:
         notify += ["*배대지 요금*"] + [f"• {m}" for m in stale_new]
+
+    # 알리 토큰: 만료가 가까우면 자동 갱신 (매시간 실행이 이어 주는 구조). 갱신이 막히면 알림 (같은 상태면 한 번만)
+    if not run.demo:
+        ali = ali_token_messages()
+        for m in ali:
+            print(f"[알리 토큰] {m}")
+        ali_new = run.store.fresh_alerts("_ali_token", ali)
+        if ali_new:
+            notify += ["*알리 토큰*"] + [f"• {m}" for m in ali_new]
 
     print("\n" + "=" * 72 + "\n[고정 모니터링 상품]")
     for spec in (s for s in specs if not s.discover):
