@@ -318,11 +318,15 @@ def model_words(keyword: str) -> list[str]:
 TRANSLATE_CALL = None       # 테스트에서 가짜 번역 함수로 바꿈 (None = 실제 Claude 호출)
 # --search --market 값 (trade_hub 사이트 선택과 같은 값). sources=None 이면 일반 검색 소스 전부(라쿠텐·야후)
 SEARCH_MARKETS = {
-    "rakuten": {"name": "라쿠텐(일본)", "lang": "ja", "sources": None, "skip": ["yahoo"]},
+    # 일본 = 라쿠텐·야후 함께 (일본 일반 소스 전부, 키 없는 곳은 빼고 검색 + 안내). 'yahoo' 는 야후만 (명령줄·예전 호출용)
+    "rakuten": {"name": "일본(라쿠텐·야후)", "lang": "ja", "sources": None, "also": ["yahoo"]},
     "yahoo": {"name": "야후 쇼핑(일본)", "lang": "ja", "sources": ["yahoo"]},
     "aliexpress": {"name": "알리익스프레스(중국)", "lang": "en", "sources": ["aliexpress"]},
     "ebay": {"name": "이베이(미국)", "lang": "en", "sources": ["ebay"]},
 }
+
+
+ALSO_NAMES = {"yahoo": "야후 쇼핑"}
 
 
 def search(cfg: dict, args) -> int:
@@ -364,8 +368,11 @@ def search(cfg: dict, args) -> int:
     print(f"\n[직접 검색] {keyword}  ({mk['name']}, 카테고리: {category_label(cfg, args.category)}"
           + (f", 필수 단어: {'·'.join(must)}" if must else "") + ")")
     print(f"소스: {', '.join(spec.sources or run.search_sources() or run.sources) or '없음'}")
-    if mk.get("skip") and not spec.sources and not run.demo:   # 라쿠텐 = 일본 일반 소스 중 야후 빼고 (야후는 따로)
-        spec.sources = [n for n in run.search_sources() if n not in mk["skip"]]
+    notes = [f"{ALSO_NAMES.get(n, n)}: 키 없음(또는 꺼짐) → 이번엔 빼고 검색. "
+             f"config/settings.local.toml [sources.{n}] 에 키를 넣으면 같이 검색"
+             for n in mk.get("also", []) if n not in run.sources and not run.demo]
+    for m in notes:
+        print(f"  ⚠ {m}")
     missing = [n for n in spec.sources if n not in run.sources and not run.demo]
     if missing:                          # 키 없음 → 검색하지 않고 실패로 기록 (빈 결과를 '상품 없음'으로 오해하지 않게)
         cls = REGISTRY.get(missing[0])
@@ -382,7 +389,7 @@ def search(cfg: dict, args) -> int:
     if reason := check_spec(cfg, spec):
         res = Result(spec=spec, blocked_reason=reason)
         print("\n".join(fmt_result(res)))
-        write_search(out, None, query, markets, [res], {}, 0)
+        write_search(out, None, query, markets, [res], {}, 0, notes)
         return 0
     offers, errors, skipped = run.fetch(spec, newest=False)
     excluded: dict[str, int] = {}
@@ -398,7 +405,7 @@ def search(cfg: dict, args) -> int:
     if errors and offers:
         for r in results:
             r.alerts.append("일부 쇼핑몰 조회 실패: " + " / ".join(errors))
-    write_search(out, problem, query, markets, results, excluded, len(offers))
+    write_search(out, problem, query, markets, results, excluded, len(offers), notes)
 
     if problem:
         print(f"  ❌ 조회 실패: {problem}")

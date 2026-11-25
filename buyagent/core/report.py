@@ -128,7 +128,8 @@ def write_latest(path: Path, error: str | None, demo: bool, markets: list[str],
 
 
 def write_search(path: Path, error: str | None, query: dict, markets: list[str],
-                 results: list[Result], excluded: dict[str, int], total: int) -> None:
+                 results: list[Result], excluded: dict[str, int], total: int,
+                 notes: list[str] | None = None) -> None:
     """직접 검색(--search) 결과. 감시 결과(latest.json)와 섞이지 않게 따로 저장"""
     write_json(path, {
         "ok": not error,
@@ -138,6 +139,7 @@ def write_search(path: Path, error: str | None, query: dict, markets: list[str],
         "markets": markets,
         "found": total,                     # 쇼핑몰이 돌려준 전체 건수
         "excluded": excluded,               # 걸러낸 사유별 건수
+        "notes": notes or [],               # 검색에서 빠진 쇼핑몰 등 안내 (예: 야후 키 없음)
         "items": [result_json("검색", r) for r in results],   # 개당 원가 낮은 순
     })
 

@@ -992,6 +992,17 @@ class TestLatestJson(TmpDirTest):
         self.assertEqual(d["query"]["market"], "rakuten")
         self.assertIn("ベルト", d["query"]["exclude"])
 
+    def test_search_japan_notes_missing_yahoo(self):
+        c = load_config(self.tmp)
+        c["sources"] = {}                                          # 야후 키 없음 (다른 일본 소스도 없음)
+        M.load_config = lambda *a, **k: c
+        self._main("--search", "セイコー SBTQ041", "--category", "watch")
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertTrue(any("야후 쇼핑" in n and "빼고 검색" in n for n in d["notes"]))
+        self._main("--demo", "--search", "セイコー SBTQ041", "--category", "watch")
+        d = json.loads((self.tmp / "reports" / "search.json").read_text(encoding="utf-8"))
+        self.assertEqual(d["notes"], [])                           # 데모는 안내 없음
+
     def test_search_market_ebay_without_keys(self):
         cls = REGISTRY["ebay"]
         saved = cls.keys
@@ -1231,7 +1242,7 @@ class TestEbay(unittest.TestCase):
         import web as W
         self.assertIn("ebay", M.SEARCH_MARKETS)
         self.assertEqual(M.SEARCH_MARKETS["ebay"]["lang"], "en")
-        self.assertEqual(set(M.SEARCH_MARKETS), set(W.SEARCH_MARKETS))   # 화면과 CLI 값이 같음
+        self.assertEqual(set(M.SEARCH_MARKETS) - {"yahoo"}, set(W.SEARCH_MARKETS))   # 화면 = CLI (야후 단독은 명령줄만)
         self.assertEqual(W.MARKET_SOURCES["ebay"], "ebay")
 
 
@@ -1371,7 +1382,8 @@ class TestOverseasShipping(unittest.TestCase):
 
     def test_yahoo_market(self):
         self.assertEqual(M.SEARCH_MARKETS["yahoo"]["sources"], ["yahoo"])
-        self.assertIn("yahoo", M.SEARCH_MARKETS["rakuten"]["skip"])
+        self.assertEqual(M.SEARCH_MARKETS["rakuten"]["sources"], None)       # 일본 = 라쿠텐·야후 함께
+        self.assertIn("yahoo", M.SEARCH_MARKETS["rakuten"]["also"])
 
 
 if __name__ == "__main__":

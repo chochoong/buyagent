@@ -51,7 +51,7 @@ DEFAULT_PORT = 8766
 MAX_QUERY = 100
 JOB_TIMEOUT = {"search": 5 * 60, "run": 30 * 60}     # 초
 # 직접 검색 사이트 (main.py SEARCH_MARKETS 와 같은 값) → 감시 추가 때 products.csv sources 칸
-SEARCH_MARKETS = {"rakuten": "라쿠텐(일본·일본어로 검색)", "yahoo": "야후 쇼핑(일본·일본어로 검색)", "aliexpress": "알리익스프레스(중국 직배송·영어로 자동 검색)",
+SEARCH_MARKETS = {"rakuten": "일본: 라쿠텐·야후 함께(일본어로 검색)", "aliexpress": "알리익스프레스(중국 직배송·영어로 자동 검색)",
                   "ebay": "이베이(미국·영어로 검색)"}
 MARKET_SOURCES = {"rakuten": "", "yahoo": "yahoo", "aliexpress": "aliexpress", "ebay": "ebay"}
 PRODUCT_COLS = ["id", "name", "category", "keyword", "jan", "must_include", "exclude", "trusted_shops", "sources",
@@ -489,8 +489,9 @@ def name_cell(name, ko: dict, n: int) -> str:
     return clip(name, n) + (f' <span class="muted">({e(k)})</span>' if k else "")
 
 
-def naver_cell(kw: str, st: dict | None, rec, pid: str = "") -> str:
-    """스마트스토어 권장가 아래: [네이버 최저가 보기] 링크 + 사람이 적은 최저가 (자동 수집 아님)"""
+def naver_cell(kw: str, st: dict | None, rec, pid: str = "", cost=None) -> str:
+    """스마트스토어 권장가 아래: [네이버 최저가 보기] 링크 + 사람이 적은 최저가 (자동 수집 아님).
+    네이버 최저가가 개당 원가 이하면 '구매대행으로 경쟁 불가' 경고 (그 값에 팔면 수수료 전에 이미 손해)"""
     out = '<div class="small">' + link(naver_low.search_url(kw), "네이버 최저가 보기 ↗") + "</div>" if kw else ""
     if st:
         cmp = ""
@@ -502,6 +503,9 @@ def naver_cell(kw: str, st: dict | None, rec, pid: str = "") -> str:
                 else f'{e(st["checked"][5:])} 확인')
         tip = f' title="메모: {e(st["memo"])}"' if st["memo"] else ""
         out += f'<div class="small"{tip}>네이버 최저가 {money(st["price"])} · {when}{cmp}</div>'
+        if isinstance(cost, (int, float)) and cost > 0 and st["price"] <= cost:
+            out += (f'<div class="small"><span class="tag bad">경쟁 불가</span> <span class="bad">네이버 최저가가 '
+                    f'개당 원가({money(cost)})보다 낮음 → 구매대행으로는 이 값에 맞출 수 없어요</span></div>')
     elif pid:
         out += '<div class="small muted">네이버 최저가 미입력</div>'
     if pid:
@@ -528,7 +532,7 @@ def result_rows(items: list[dict], markets: list[str], names: dict[str, str], nu
                     if q else '<span class="muted">–</span>')
             if m == "naver" and naver:
                 kw, st, pid = naver(it)
-                cell += naver_cell(kw, st, (q or {}).get("recommended_price"), pid)
+                cell += naver_cell(kw, st, (q or {}).get("recommended_price"), pid, it.get("cost_krw"))
             cells.append(cell)
         why = it.get("blocked_reason")
         rows.append(([str(i)] if numbered else []) + [
@@ -599,6 +603,7 @@ def render(base: Path = BASE) -> str:
                  f'{e((search.get("run_at") or "")[:16].replace("T", " "))} · 쇼핑몰 결과 {e(search.get("found", 0))}건'
                  + (f' · <span class="bad">실패: {e(search.get("error"))}</span>' if not search.get("ok") else "")
                  + f'</div>{add}</div>'
+                 + "".join(f'<p class="small warn">⚠ {e(n)}</p>' for n in search.get("notes") or [])
                  + (table(heads, rows) if rows else '<p class="muted">조건에 맞는 재고 있는 판매처가 없어요.</p>')
                  + (f'<p class="small muted">걸러낸 결과: {e(", ".join(f"{k} {v}건" for k, v in excl.items()))}</p>'
                     if excl else ""))

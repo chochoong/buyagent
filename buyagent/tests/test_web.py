@@ -307,7 +307,8 @@ class OverseasCellTest(unittest.TestCase):
         self.assertIn("해외배송 가능", html_)
         it.update(ship_route="forwarder", ship_overseas="표시:海外発送")
         self.assertIn("해외배송 표시", W.cost_cell(it))
-        self.assertIn("yahoo", W.SEARCH_MARKETS)
+        self.assertNotIn("yahoo", W.SEARCH_MARKETS)                # 일본 하나로 (라쿠텐·야후 함께)
+        self.assertIn("라쿠텐·야후", W.SEARCH_MARKETS["rakuten"])
 
 
 class NaverLowTest(unittest.TestCase):
@@ -355,6 +356,14 @@ class NaverLowTest(unittest.TestCase):
         self.assertIn("메모: A샵 무료배송", page)
         self.assertEqual(W.naver_low_request({"id": "SBTQ041", "price": ""}, self.tmp)[0], 200)
         self.assertIn("네이버 최저가 미입력", W.render(self.tmp))
+
+    def test_below_cost_warns(self):
+        self.assertIn("경쟁 불가", W.naver_cell("x", {"price": 149000, "checked": "2026-11-25", "memo": "",
+                                                    "days": 0, "stale": False}, 192900, "P", 159443))
+        self.assertNotIn("경쟁 불가", W.naver_cell("x", {"price": 170000, "checked": "2026-11-25", "memo": "",
+                                                       "days": 0, "stale": False}, 192900, "P", 159443))
+        W.naver_low_request({"id": "SBTQ041", "price": "1000"}, self.tmp)
+        self.assertIn("경쟁 불가", W.render(self.tmp))
 
     def test_stale_after_max_days(self):
         from datetime import date, timedelta
